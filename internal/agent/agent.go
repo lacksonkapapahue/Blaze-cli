@@ -92,23 +92,27 @@ func (a *Agent) Ask(ctx context.Context, prompt string) (string, error) {
 		md := &ui.MD{}
 		if !a.Quiet {
 			a.spin.Start("thinking")
+			opened := false
+			md.Pre = func() {
+				a.spin.Stop()
+				if !opened {
+					ui.Println("")
+					opened = true
+				}
+			}
+			md.Post = func() { a.spin.Start("writing") }
 		}
-		first := true
 		r, err := llm.Complete(ctx, a.Cfg, msgs, all, func(s string) {
 			if a.Quiet {
 				return
 			}
-			if first {
-				a.spin.Stop()
-				ui.Println("")
-				first = false
-			}
+			a.spin.Set("writing")
 			md.Write(s)
 		})
-		a.spin.Stop()
 		if !a.Quiet {
 			md.Flush()
 		}
+		a.spin.Stop()
 		if err != nil {
 			// Keep history valid: drop the unanswered user turn on hard failure of the first step.
 			if step == 0 {
@@ -120,7 +124,7 @@ func (a *Agent) Ask(ctx context.Context, prompt string) (string, error) {
 		if len(r.ToolCalls) == 0 {
 			final = r.Text
 			if !a.Quiet {
-				ui.Println("\n  " + ui.Weak(fmt.Sprintf("%s · %.1fs", r.Route, time.Since(started).Seconds())))
+				ui.Footer(r.Route, time.Since(started))
 			}
 			return final, nil
 		}
@@ -131,10 +135,11 @@ func (a *Agent) Ask(ctx context.Context, prompt string) (string, error) {
 			if !a.Quiet {
 				a.spin.Start(describe(tc))
 			}
+			t0 := time.Now()
 			res := tools.Run(a.Env, tc.Function.Name, tc.Function.Arguments)
 			a.spin.Stop()
 			if !a.Quiet {
-				ui.Step(describe(tc) + "  " + ui.Weak(summarize(res)))
+				ui.StepDone(succeeded(res), describe(tc), summarize(res), time.Since(t0))
 			}
 			a.History = append(a.History, llm.Message{Role: "tool", ToolCallID: tc.ID, Name: tc.Function.Name, Content: res})
 		}
@@ -181,6 +186,19 @@ func describe(tc llm.ToolCall) string {
 		return "run " + pick("language")
 	}
 	return strings.ReplaceAll(n, "_", " ")
+}
+
+// succeeded reads a tool result for failure: errors, non-zero exits, declines.
+func succeeded(res string) bool {
+	t := strings.TrimSpace(res)
+	low := strings.ToLower(t)
+	switch {
+	case strings.HasPrefix(t, "Error"), strings.HasPrefix(t, "Refused"), strings.HasPrefix(low, "declined"), strings.Contains(low, "did not approve"):
+		return false
+	case strings.HasPrefix(t, "exit ") && !strings.HasPrefix(t, "exit 0"):
+		return false
+	}
+	return true
 }
 
 func summarize(res string) string {

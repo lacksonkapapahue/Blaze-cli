@@ -31,6 +31,22 @@ blaze schedule list | remove NAME
 Flags: `--yolo` (skip approvals; deletes still ask), `--model provider/model`.
 In chat: `/clear /model /yolo /jobs /schedule /pc /doctor /setup /exit`. Ctrl-C stops the running task.
 
+### Keys at the prompt
+| Key | Does |
+|---|---|
+| ← → · Home End · Ctrl-A Ctrl-E | move the cursor |
+| Ctrl-← Ctrl-→ · Alt-B Alt-F | jump by word |
+| ↑ ↓ · Ctrl-P Ctrl-N | history (kept in `~/.blaze/history`) |
+| Tab · → at the end | complete a `/command`, or accept the dim suggestion |
+| Backspace · Delete · Ctrl-W · Ctrl-U · Ctrl-K · Ctrl-Y | edit, delete word, cut to start / end, paste back |
+| Ctrl-L | clear the screen |
+| Ctrl-C | clear the line; on an empty line, twice to quit · Ctrl-D quits |
+
+Pasting multi-line text keeps the newlines (shown as ↵) and doesn't send until you press Enter.
+Approval prompts and the setup picker use ← → / ↑ ↓, Space and Enter.
+
+Motion (intro, status glint, step marks) turns off with `BLAZE_NO_ANIM=1`, `NO_COLOR`, or when output is piped.
+
 ## What it detects
 OS and version, CPU, RAM, GPU (NVIDIA, AMD, Intel, Apple), free disk, your shell (PowerShell, bash, zsh…),
 package managers (winget, choco, scoop, brew, apt, dnf, pacman, zypper, apk) and tools (git, python, node,

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -39,6 +40,7 @@ func usage() {
 
 func main() {
 	ui.Init()
+	defer ui.ShowCursor()
 	args := os.Args[1:]
 	yolo := false
 	var model string
@@ -143,8 +145,13 @@ func main() {
 }
 
 func repl(a *agent.Agent, in sysinfo.Info) {
-	ui.Banner(version, in.OSName+" · "+in.Shell+" · "+shortPath(a.Env.Root))
-	ui.Println("  " + ui.Sub("Ask anything, or give a task. ") + ui.Weak("/help for commands · Ctrl-C stops a task · /exit to leave"))
+	ui.BannerAnimated(version, in.OSName+" · "+in.Shell+" · "+shortPath(a.Env.Root))
+	ui.Println("  " + ui.Sub("Ask anything, or give a task. ") + ui.Weak("/help commands · ↑ history · tab complete · ctrl-c stops a task"))
+	ed := &ui.Editor{
+		HistoryFile: filepath.Join(config.Dir(), "history"),
+		Commands:    []string{"/clear", "/doctor", "/exit", "/help", "/jobs", "/model", "/new", "/pc", "/quit", "/schedule", "/setup", "/yolo"},
+		Placeholder: "Ask anything · ↑ history · / commands",
+	}
 
 	// Ctrl-C cancels the running turn; at the prompt, twice in a row exits.
 	sig := make(chan os.Signal, 1)
@@ -163,6 +170,7 @@ func repl(a *agent.Agent, in sysinfo.Info) {
 			}
 			if time.Since(lastIdle) < 2*time.Second {
 				ui.Println("")
+				ui.ShowCursor()
 				a.Close()
 				os.Exit(0)
 			}
@@ -172,9 +180,19 @@ func repl(a *agent.Agent, in sysinfo.Info) {
 	}()
 
 	for {
-		line, err := ui.ReadLine(ui.Prompt())
+		line, err := ed.Read(ui.Prompt())
+		if errors.Is(err, ui.ErrInterrupt) {
+			// In raw mode Ctrl-C arrives as a key, not a signal: twice quits.
+			if time.Since(lastIdle) < 2*time.Second {
+				ui.Goodbye()
+				return
+			}
+			lastIdle = time.Now()
+			ui.Println("  " + ui.Weak("Ctrl-C again to quit"))
+			continue
+		}
 		if err != nil {
-			ui.Println("")
+			ui.Goodbye()
 			return
 		}
 		line = strings.TrimSpace(line)
@@ -183,6 +201,7 @@ func repl(a *agent.Agent, in sysinfo.Info) {
 		}
 		if strings.HasPrefix(line, "/") {
 			if slash(a, line) {
+				ui.Goodbye()
 				return
 			}
 			continue
@@ -284,7 +303,10 @@ func runJob(cfg *config.Config, name string) int {
 	}
 	a := agent.New(cfg, &in, dir, false)
 	a.Quiet = true
-	a.Env.Confirm = func(title, detail string) bool { fmt.Fprintf(log, "[declined, nobody to ask] %s %s\n", title, detail); return false }
+	a.Env.Confirm = func(title, detail string) bool {
+		fmt.Fprintf(log, "[declined, nobody to ask] %s %s\n", title, detail)
+		return false
+	}
 	defer a.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()

@@ -9,7 +9,6 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"time"
 	"unicode/utf8"
 )
 
@@ -149,6 +148,7 @@ func Numbered(items []string) {
 	}
 }
 
+// Banner is the static header (help, doctor). BannerAnimated plays the intro.
 func Banner(version, sub string) {
 	Println("")
 	Println("  " + Accent("■") + "  " + Bold("B L A Z E") + "  " + Weak(version))
@@ -163,66 +163,6 @@ func Dot(ok bool) string {
 		return Accent("■")
 	}
 	return Ink("□")
-}
-
-// ---------- spinner / status ----------
-
-type Spinner struct {
-	mu   sync.Mutex
-	text string
-	stop chan struct{}
-	on   bool
-}
-
-var frames = []string{"▖", "▘", "▝", "▗"}
-
-func (s *Spinner) Start(text string) {
-	if !color {
-		return
-	}
-	s.mu.Lock()
-	s.text = text
-	if s.on {
-		s.mu.Unlock()
-		return
-	}
-	s.on = true
-	s.stop = make(chan struct{})
-	stop := s.stop
-	s.mu.Unlock()
-	go func() {
-		t := time.NewTicker(110 * time.Millisecond)
-		defer t.Stop()
-		i := 0
-		start := time.Now()
-		for {
-			select {
-			case <-stop:
-				return
-			case <-t.C:
-				s.mu.Lock()
-				txt := s.text
-				s.mu.Unlock()
-				el := time.Since(start).Round(time.Second)
-				Printf("\r\x1b[2K  %s %s %s", Accent(frames[i%len(frames)]), Sub(txt), Weak(el.String()))
-				i++
-			}
-		}
-	}()
-}
-
-func (s *Spinner) Set(text string) { s.mu.Lock(); s.text = text; s.mu.Unlock() }
-
-func (s *Spinner) Stop() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.on {
-		return
-	}
-	s.on = false
-	close(s.stop)
-	time.Sleep(15 * time.Millisecond)
-	Printf("\r\x1b[2K")
 }
 
 // Step prints a finished-step line: "  · Running: npm test".
@@ -240,16 +180,10 @@ func ReadLine(prompt string) (string, error) {
 
 func Prompt() string { return "\n" + Accent("›") + " " }
 
-// Confirm shows the app's confirm card: a box with the action and Yes / No.
+// Confirm shows the app's confirm card, then an arrow-key Yes / No.
 func Confirm(title, detail string) bool {
-	lines := []string{Ink(detail), "", Accent("[y]") + Sub(" yes   ") + Ink("[n]") + Sub(" no")}
-	Box(AccentLabel(title), wrapLines(detail, lines))
-	ans, err := ReadLine("  " + Accent("?") + " ")
-	if err != nil {
-		return false
-	}
-	a := strings.ToLower(strings.TrimSpace(ans))
-	return a == "y" || a == "yes"
+	Box(AccentLabel(title), wrapLines(detail, []string{Ink(detail)}))
+	return Choose("  "+Accent("?")+" ", []string{"Yes", "No"}, 1, 1) == 0
 }
 
 func wrapLines(detail string, lines []string) []string {
@@ -262,7 +196,7 @@ func wrapLines(detail string, lines []string) []string {
 		detail = detail[84:]
 	}
 	out = append(out, Ink(detail))
-	return append(out, lines[1:]...)
+	return out
 }
 
 // Secret reads a line without echo when possible (API keys).

@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os/exec"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
@@ -70,19 +69,11 @@ func openBrowser(u string) {
 }
 
 func yes(q string, def bool) bool {
-	hint := "[Y/n]"
-	if !def {
-		hint = "[y/N]"
+	d := 1
+	if def {
+		d = 0
 	}
-	a, err := ui.ReadLine("  " + ui.Ink(q) + " " + ui.Weak(hint) + " ")
-	if err != nil {
-		return def
-	}
-	a = strings.ToLower(strings.TrimSpace(a))
-	if a == "" {
-		return def
-	}
-	return a == "y" || a == "yes"
+	return ui.Choose("  "+ui.Ink(q)+" ", []string{"Yes", "No"}, d, 1) == 0
 }
 
 // FromEnv builds a chain silently from API keys already in the environment.
@@ -104,7 +95,7 @@ func FromEnv(cfg *config.Config) bool {
 
 // Run is the interactive wizard.
 func Run(cfg *config.Config, in *sysinfo.Info) {
-	ui.Banner("setup", "Let's get Blaze running on this PC. About a minute.")
+	ui.BannerAnimated("setup", "Let's get Blaze running on this PC. About a minute.")
 	ui.Println("  " + ui.Label("01 · detecting your pc"))
 	ShowPC(*in)
 
@@ -153,28 +144,21 @@ func Run(cfg *config.Config, in *sysinfo.Info) {
 		ollamaOK = true
 		rows = append(rows, ui.Ink("Ollama (local, offline)")+ui.Weak("  runs on your own "+gpuOrCPU(*in)))
 	}
-	ui.Numbered(rows)
-	pick, _ := ui.ReadLine("\n  " + ui.Ink("Which ones? ") + ui.Weak("numbers like 1,2 · Enter = 1 (Gemini) ") )
-	pick = strings.TrimSpace(pick)
-	if pick == "" {
-		pick = "1"
-	}
+	ui.Println("  " + ui.Sub("Tick the ones you want. Gemini is a good start."))
+	ticked := make([]bool, len(rows))
+	ticked[0] = true
 	var chain []config.Entry
-	for _, f := range strings.FieldsFunc(pick, func(r rune) bool { return r == ',' || r == ' ' }) {
-		n, err := strconv.Atoi(f)
-		if err != nil || n < 1 {
-			continue
-		}
-		if n == len(free)+1 && ollamaOK {
+	for _, i := range ui.Checklist(rows, ticked) {
+		if i == len(free) && ollamaOK {
 			if e, ok := setupOllama(); ok {
 				chain = append(chain, e)
 			}
 			continue
 		}
-		if n > len(free) {
+		if i >= len(free) {
 			continue
 		}
-		if e, ok := setupProvider(cfg, free[n-1]); ok {
+		if e, ok := setupProvider(cfg, free[i]); ok {
 			chain = append(chain, e)
 		}
 	}
@@ -213,7 +197,7 @@ func setupProvider(cfg *config.Config, p config.Provider) (config.Entry, bool) {
 		if yes("Open the page to get a free key?", true) {
 			openBrowser(p.KeyPage)
 		}
-		key = ui.Secret("  " + ui.Ink("Paste the key ") + ui.Weak("("+p.KeyHint+", hidden) ") )
+		key = ui.Secret("  " + ui.Ink("Paste the key ") + ui.Weak("("+p.KeyHint+", hidden) "))
 		if key == "" {
 			ui.Step("Skipped " + p.Name)
 			return config.Entry{}, false

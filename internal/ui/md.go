@@ -11,13 +11,16 @@ type MD struct {
 	buf    strings.Builder
 	inCode bool
 	any    bool
+	// Pre runs before a batch of finished lines is printed (stop the spinner),
+	// Post after it while more text is still streaming (start it again).
+	Pre, Post func()
 }
 
 var (
-	reBold  = regexp.MustCompile(`\*\*([^*]+)\*\*`)
-	reCode  = regexp.MustCompile("`([^`]+)`")
-	reNum   = regexp.MustCompile(`^(\s*)(\d+)[.)]\s+(.*)$`)
-	reLink  = regexp.MustCompile(`\[([^\]]+)\]\((https?://[^)]+)\)`)
+	reBold = regexp.MustCompile(`\*\*([^*]+)\*\*`)
+	reCode = regexp.MustCompile("`([^`]+)`")
+	reNum  = regexp.MustCompile(`^(\s*)(\d+)[.)]\s+(.*)$`)
+	reLink = regexp.MustCompile(`\[([^\]]+)\]\((https?://[^)]+)\)`)
 )
 
 func inline(s string) string {
@@ -73,12 +76,22 @@ func (m *MD) line(l string) {
 func (m *MD) Write(s string) {
 	m.any = true
 	m.buf.WriteString(s)
+	printed := false
+	defer func() {
+		if printed && m.Post != nil {
+			m.Post()
+		}
+	}()
 	for {
 		b := m.buf.String()
 		i := strings.IndexByte(b, '\n')
 		if i < 0 {
 			return
 		}
+		if !printed && m.Pre != nil {
+			m.Pre()
+		}
+		printed = true
 		m.line(strings.TrimRight(b[:i], "\r"))
 		m.buf.Reset()
 		m.buf.WriteString(b[i+1:])
@@ -87,6 +100,9 @@ func (m *MD) Write(s string) {
 
 // Flush renders whatever is left (the last line has no newline).
 func (m *MD) Flush() {
+	if m.Pre != nil && (m.buf.Len() > 0 || m.inCode) {
+		m.Pre()
+	}
 	if rest := m.buf.String(); rest != "" {
 		m.line(rest)
 		m.buf.Reset()
