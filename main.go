@@ -20,6 +20,7 @@ import (
 	"github.com/lacksonkapapahue/blaze-cli/internal/sysinfo"
 	"github.com/lacksonkapapahue/blaze-cli/internal/tools"
 	"github.com/lacksonkapapahue/blaze-cli/internal/ui"
+	"github.com/lacksonkapapahue/blaze-cli/internal/update"
 )
 
 var version = "dev" // set by CI: -ldflags "-X main.version=v0.1.0"
@@ -33,6 +34,7 @@ func usage() {
 		ui.Accent("blaze doctor") + ui.Sub("                check models, shell, tools, scheduler"),
 		ui.Accent("blaze pc") + ui.Sub("                    show what Blaze detected about this PC"),
 		ui.Accent("blaze schedule list|remove NAME") + ui.Sub(" scheduled jobs"),
+		ui.Accent("blaze update") + ui.Sub("                download the newest Blaze"),
 		ui.Accent("blaze version"),
 	})
 	ui.Println("\n  " + ui.Label("flags") + "  " + ui.Ink("--yolo") + ui.Sub(" skip approval prompts (deletes still ask)  ") + ui.Ink("--model provider/model"))
@@ -70,6 +72,13 @@ func main() {
 	switch cmd {
 	case "help", "-h", "--help":
 		usage()
+		return
+	case "update", "upgrade":
+		force := len(rest) > 1 && (rest[1] == "--force" || rest[1] == "-f")
+		if err := update.Run(version, force); err != nil {
+			ui.Println("  " + ui.Ink("■ ") + ui.Sub(err.Error()))
+			os.Exit(1)
+		}
 		return
 	case "version", "--version", "-v":
 		fmt.Println("blaze", version)
@@ -147,9 +156,12 @@ func main() {
 func repl(a *agent.Agent, in sysinfo.Info) {
 	ui.BannerAnimated(version, in.OSName+" · "+in.Shell+" · "+shortPath(a.Env.Root))
 	ui.Println("  " + ui.Sub("Ask anything, or give a task. ") + ui.Weak("/help commands · ↑ history · tab complete · ctrl-c stops a task"))
+	if tag := update.Hint(version); tag != "" {
+		ui.Println("  " + ui.Accent("■ ") + ui.Ink("Blaze "+tag+" is out. ") + ui.Sub("Type ") + ui.Accent("/update") + ui.Sub(" to get it."))
+	}
 	ed := &ui.Editor{
 		HistoryFile: filepath.Join(config.Dir(), "history"),
-		Commands:    []string{"/clear", "/doctor", "/exit", "/help", "/jobs", "/model", "/new", "/pc", "/quit", "/schedule", "/setup", "/yolo"},
+		Commands:    []string{"/clear", "/doctor", "/exit", "/help", "/jobs", "/model", "/new", "/pc", "/quit", "/schedule", "/setup", "/update", "/yolo"},
 		Placeholder: "Ask anything · ↑ history · / commands",
 	}
 
@@ -242,6 +254,10 @@ func slash(a *agent.Agent, line string) bool {
 		setup.Doctor(a.Cfg, *a.Env.Info, version)
 	case "/setup":
 		setup.Run(a.Cfg, a.Env.Info)
+	case "/update":
+		if err := update.Run(version, len(f) > 1 && f[1] == "--force"); err != nil {
+			ui.Println("  " + ui.Ink("■ ") + ui.Sub(err.Error()))
+		}
 	case "/jobs":
 		ui.Println(tools.Run(a.Env, "job_log", "{}"))
 	case "/schedule":
@@ -269,6 +285,7 @@ func slash(a *agent.Agent, line string) bool {
 			ui.Accent("/pc") + ui.Sub("       what Blaze knows about this PC"),
 			ui.Accent("/doctor") + ui.Sub("   check everything"),
 			ui.Accent("/setup") + ui.Sub("    add models or tools"),
+			ui.Accent("/update") + ui.Sub("   get the newest Blaze"),
 			ui.Accent("/exit"),
 		})
 	}

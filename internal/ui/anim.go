@@ -260,3 +260,52 @@ func Goodbye() {
 	}
 	Printf("\r\n")
 }
+
+// ---------- progress bar ----------
+
+// Progress is a hairline bar that fills in the accent: "━━━━────  42%  3.1 MB".
+type Progress struct {
+	label      string
+	total, got int64
+	last       time.Time
+}
+
+func NewProgress(label string, total int64) *Progress {
+	p := &Progress{label: label, total: total}
+	hideCursor()
+	p.draw()
+	return p
+}
+
+func (p *Progress) Write(b []byte) (int, error) {
+	p.got += int64(len(b))
+	if time.Since(p.last) > 50*time.Millisecond {
+		p.draw()
+	}
+	return len(b), nil
+}
+
+func (p *Progress) draw() {
+	p.last = time.Now()
+	n := 28
+	frac := 0.0
+	if p.total > 0 {
+		frac = float64(p.got) / float64(p.total)
+	}
+	fill := int(frac * float64(n))
+	if fill > n {
+		fill = n
+	}
+	bar := Accent(strings.Repeat("━", fill)) + hair(strings.Repeat("─", n-fill))
+	Printf("\r\x1b[2K  %s  %s  %s  %s", Sub(p.label), bar, Ink(fmt.Sprintf("%3.0f%%", frac*100)), Weak(fmt.Sprintf("%.1f MB", float64(p.got)/1e6)))
+}
+
+// Done fills the bar and ends the line.
+func (p *Progress) Done() {
+	if p.total > 0 && p.got >= p.total {
+		p.got = p.total
+	}
+	p.draw()
+	Printf("\r\n")
+	ShowCursor()
+}

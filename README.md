@@ -27,7 +27,10 @@ blaze setup                    detect this PC, add free models, install missing 
 blaze doctor                   check models, shell, tools, scheduler
 blaze pc                       what Blaze detected about this PC
 blaze schedule list | remove NAME
+blaze update                   download the newest release and replace this binary
 ```
+`blaze update` (or `/update` in chat) uses `GITHUB_TOKEN`, or your `gh` login, while the repo is private.
+Blaze checks for a new version at most once a day and mentions it under the banner (`BLAZE_NO_UPDATE_CHECK=1` turns that off).
 Flags: `--yolo` (skip approvals; deletes still ask), `--model provider/model`.
 In chat: `/clear /model /yolo /jobs /schedule /pc /doctor /setup /exit`. Ctrl-C stops the running task.
 
