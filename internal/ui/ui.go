@@ -127,15 +127,15 @@ func Box(title string, lines []string) {
 	if title == "" {
 		top = hair("┌" + strings.Repeat("─", w-2) + "┐")
 	}
-	Println(top)
+	Println("  " + top)
 	for _, l := range lines {
 		pad := w - width(l) - 3
 		if pad < 0 {
 			pad = 0
 		}
-		Println(hair("│ ") + l + strings.Repeat(" ", pad) + hair("│"))
+		Println("  " + hair("│ ") + l + strings.Repeat(" ", pad) + hair("│"))
 	}
-	Println(hair("└" + strings.Repeat("─", w-2) + "┘"))
+	Println("  " + hair("└"+strings.Repeat("─", w-2)+"┘"))
 }
 
 // Rule is a full hairline.

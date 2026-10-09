@@ -65,6 +65,8 @@ func init() {
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 				return "Error: " + err.Error()
 			}
+			old, _ := os.ReadFile(path)
+			before := string(old)
 			flag := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
 			if a.b("append") {
 				flag = os.O_CREATE | os.O_WRONLY | os.O_APPEND
@@ -77,6 +79,9 @@ func init() {
 			c := a.s("content")
 			if _, err := f.WriteString(c); err != nil {
 				return "Error: " + err.Error()
+			}
+			if !a.b("append") {
+				e.diff(path, before, c)
 			}
 			e.status("Wrote " + rel(e, path))
 			return fmt.Sprintf("Wrote %s (%d lines, %d bytes).", path, strings.Count(c, "\n")+1, len(c))
@@ -111,6 +116,8 @@ func init() {
 			if !inside(e.Root, path) && !e.ask("Edit a file outside this project?", path) {
 				return "The user did NOT approve editing that file."
 			}
+			before := s
+			defer func() { e.diff(path, before, s) }()
 			if a.b("all") {
 				s = strings.ReplaceAll(s, old, a.s("new_text"))
 			} else {

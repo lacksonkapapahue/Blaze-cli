@@ -38,8 +38,8 @@ func NewShell(kind, path, cwd string) *Shell {
 	return &Shell{cwd: cwd, kind: kind, path: path}
 }
 
-func (s *Shell) Cwd() string { s.mu.Lock(); defer s.mu.Unlock(); return s.cwd }
-func (s *Shell) Kind() string { return s.kind }
+func (s *Shell) Cwd() string        { s.mu.Lock(); defer s.mu.Unlock(); return s.cwd }
+func (s *Shell) Kind() string       { return s.kind }
 func (s *Shell) IsPowerShell() bool { return s.kind == "pwsh" || s.kind == "powershell" }
 
 const cwdMark = "__BLAZE_CWD__"
@@ -211,7 +211,11 @@ func (js *Jobs) Get(id int) *job {
 	return nil
 }
 
-func (js *Jobs) List() []*job { js.mu.Lock(); defer js.mu.Unlock(); return append([]*job(nil), js.all...) }
+func (js *Jobs) List() []*job {
+	js.mu.Lock()
+	defer js.mu.Unlock()
+	return append([]*job(nil), js.all...)
+}
 
 func (js *Jobs) StopAll() {
 	for _, j := range js.List() {

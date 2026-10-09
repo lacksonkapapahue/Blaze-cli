@@ -132,7 +132,23 @@ type Spinner struct {
 	since time.Time
 }
 
-var frames = []string{"◰", "◳", "◲", "◱"}
+// sparks: braille dots that rise through two cells, like embers off a blaze.
+var sparkBits = [4][2]rune{{0x01, 0x08}, {0x02, 0x10}, {0x04, 0x20}, {0x40, 0x80}}
+
+func sparks(i int) string {
+	// four embers on fixed lanes and speeds, phase-shifted so they never sync
+	lanes := [][3]int{{0, 0, 1}, {1, 2, 1}, {2, 1, 2}, {3, 3, 1}}
+	var cells [2]rune
+	for _, l := range lanes {
+		x, phase, speed := l[0], l[1], l[2]
+		y := 3 - ((i/speed + phase) % 5)
+		if y < 0 {
+			continue
+		}
+		cells[x/2] |= sparkBits[y][x%2]
+	}
+	return string(0x2800+cells[0]) + string(0x2800+cells[1])
+}
 
 func (s *Spinner) Start(text string) {
 	if !color || !IsTTY() {
@@ -199,7 +215,7 @@ func spinLine(i int, txt string, el time.Duration) string {
 	}
 	b.WriteString(reset())
 	pulse := mix(pal.accent, pal.hair, 0.35*float64((i/2)%2))
-	return "  " + fg(pulse) + frames[i%len(frames)] + reset() + " " + b.String() + tail
+	return "  " + fg(pulse) + sparks(i) + reset() + " " + b.String() + tail
 }
 
 func (s *Spinner) Set(text string) { s.mu.Lock(); s.text = text; s.mu.Unlock() }
@@ -308,4 +324,169 @@ func (p *Progress) Done() {
 	p.draw()
 	Printf("\r\n")
 	ShowCursor()
+}
+
+// ---------- welcome card ----------
+
+// The site's brand mark: an ink square with a paper "B", drawn in half blocks.
+var bGlyph = []string{
+	"         ",
+	"  █▀▀▀▄  ",
+	"  █▄▄▄▀  ",
+	"  █   █  ",
+	"  ▀▀▀▀   ",
+	"         ",
+}
+
+func paperRGB() string {
+	if pal == light {
+		return "252;252;252"
+	}
+	return "38;38;42"
+}
+
+type particle struct {
+	x, y float64
+	v    float64
+	ch   string
+}
+
+// Welcome is the boxed start screen: the B mark with particles floating over
+// it (like the site's buttons), a glitching eyebrow, the headline and context.
+func Welcome(version, model, where, tips string) {
+	W := termWidth()
+	if W < 58 {
+		BannerAnimated(version, where)
+		return
+	}
+	bw := min(W-3, 110) // box width, same as the input box
+	inner := bw - 2
+	eyebrow := "AUTOMATION · CODE · YOUR TERMINAL"
+	right := []string{
+		"",
+		"E",
+		"",
+		"H",
+		Sub("Blaze "+version+" · ") + Ink(model),
+		Weak(where),
+	}
+	head := "Made for you."
+	markW := 9
+	rowsN := len(bGlyph)
+
+	frame := func(t int, ps []particle, glitch map[int]bool, typed int) string {
+		var sb strings.Builder
+		sb.WriteString("  " + hair("┌"+strings.Repeat("─", inner)+"┐") + "\r\n")
+		sb.WriteString("  " + hair("│") + strings.Repeat(" ", inner) + hair("│") + "\r\n")
+		for r := 0; r < rowsN; r++ {
+			// the mark, with particles riding over the ink
+			gl := []rune(bGlyph[r])
+			var mk strings.Builder
+			mk.WriteString("\x1b[48;2;" + pal.ink + "m")
+			for c := 0; c < markW; c++ {
+				ch := string(gl[c])
+				col := paperRGB()
+				if ch == " " {
+					for _, p := range ps {
+						if int(p.x) == c && int(p.y) == r {
+							ch = p.ch
+							col = mix(pal.ink, paperRGB(), 0.55+0.45*(p.y/float64(rowsN)))
+						}
+					}
+				}
+				mk.WriteString("\x1b[38;2;" + col + "m" + ch)
+			}
+			mk.WriteString(reset())
+			var txt string
+			switch right[r] {
+			case "E":
+				words := strings.Split(eyebrow, " ")
+				for i, w := range words {
+					if glitch[i] && w != "·" {
+						w = noise(len([]rune(w)), t+i)
+						words[i] = fg(pal.accent) + w + fg(pal.sub)
+					}
+				}
+				txt = Sub(strings.Join(words, " "))
+			case "H":
+				h := []rune(head)
+				txt = Bold(string(h[:min(typed, len(h))]))
+				if typed < len(h) && Animate() {
+					txt += Accent("▍")
+				}
+			default:
+				txt = right[r]
+			}
+			txt = clipStyled(txt, inner-markW-7)
+			line := "   " + mk.String() + "   " + txt
+			sb.WriteString("  " + hair("│") + line + strings.Repeat(" ", max(0, inner-width(line))) + hair("│") + "\r\n")
+		}
+		sb.WriteString("  " + hair("│") + strings.Repeat(" ", inner) + hair("│") + "\r\n")
+		tl := "   " + clipStyled(tips, inner-4)
+		sb.WriteString("  " + hair("│") + tl + strings.Repeat(" ", max(0, inner-width(tl))) + hair("│") + "\r\n")
+		sb.WriteString("  " + hair("└"+strings.Repeat("─", inner)+"┘") + "\r\n")
+		return sb.String()
+	}
+	height := rowsN + 5
+
+	Println("")
+	if !Animate() {
+		Printf("%s", frame(0, nil, nil, 99))
+		return
+	}
+	hideCursor()
+	defer ShowCursor()
+	var ps []particle
+	seed := uint32(time.Now().UnixNano())
+	rnd := func() float64 {
+		seed ^= seed << 13
+		seed ^= seed >> 17
+		seed ^= seed << 5
+		return float64(seed%10000) / 10000
+	}
+	dots := []string{"·", "∙", "•", "˙"}
+	const frames = 30
+	for t := 0; t <= frames; t++ {
+		// spawn at the bottom of the mark, drift up, fade out at the top
+		if t < frames-6 && rnd() < 0.85 {
+			ps = append(ps, particle{x: 1 + rnd()*7, y: float64(rowsN) - 0.01, v: 0.25 + rnd()*0.35, ch: dots[int(rnd()*4)%4]})
+		}
+		live := ps[:0]
+		for _, p := range ps {
+			p.y -= p.v
+			p.x += (rnd() - 0.5) * 0.4
+			if p.y >= 0 && p.x >= 0 && p.x < float64(markW) {
+				live = append(live, p)
+			}
+		}
+		ps = live
+		glitch := map[int]bool{}
+		if t > 4 && t < frames-3 && rnd() < 0.35 {
+			glitch[int(rnd()*5)%5*2] = true
+		}
+		if t > 0 {
+			Printf("\x1b[%dA", height)
+		}
+		typed := max(0, (t-6)*2)
+		Printf("%s", frame(t, ps, glitch, typed))
+		sleep(45)
+	}
+	Printf("\x1b[%dA%s", height, frame(0, nil, nil, 99))
+}
+
+func noise(n, t int) string {
+	g := []rune("▓▒░#%&@$/\\<>")
+	var b strings.Builder
+	for i := 0; i < n; i++ {
+		b.WriteRune(g[(t*7+i*3)%len(g)])
+	}
+	return b.String()
+}
+
+// clipStyled clips a coloured string to n visible columns (drops styling if cut).
+func clipStyled(s string, n int) string {
+	if width(s) <= n {
+		return s
+	}
+	return Weak(clip(ansi.ReplaceAllString(s, ""), n))
 }

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"unicode"
 
@@ -19,9 +20,13 @@ import (
 var ErrInterrupt = errors.New("interrupt")
 
 type Editor struct {
-	HistoryFile string   // persisted history, one entry per line ("" = memory only)
-	Commands    []string // slash commands for Tab / ghost completion
-	Placeholder string   // dim hint shown while the line is empty
+	HistoryFile string                   // persisted history, one entry per line ("" = memory only)
+	Commands    []string                 // slash commands for Tab / ghost completion
+	Placeholder string                   // dim hint shown while the line is empty
+	Boxed       bool                     // draw the input inside a hairline box
+	Glyph       func(line string) string // prompt glyph for the current line (mode / shell)
+	Footer      func(line string) string // dim line under the box
+	OnShiftTab  func()                   // cycle modes
 
 	history []string
 	loaded  bool
@@ -321,6 +326,9 @@ func (e *Editor) ghost() string {
 }
 
 func (e *Editor) tab() {
+	if e.atComplete() {
+		return
+	}
 	s := string(e.buf)
 	if !strings.HasPrefix(s, "/") || strings.Contains(s, " ") {
 		if g := e.ghost(); g != "" {
@@ -412,6 +420,10 @@ func (e *Editor) csi(intro rune, seq string) {
 		e.kill(e.pos, e.wordRight())
 	case "200~":
 		e.paste()
+	case "Z":
+		if e.OnShiftTab != nil {
+			e.OnShiftTab()
+		}
 	}
 	_ = intro
 }
@@ -463,70 +475,238 @@ func dispRune(r rune) (string, int) {
 	return string(r), runeW(r)
 }
 
-// render redraws the prompt line in place. final=true drops the ghost and hint.
+type cell struct {
+	s string
+	w int
+}
+
+// layout wraps cells into rows of at most n columns; it returns the rows and
+// the row/col of cell index pos.
+func layout(cells []cell, n, pos int) (rows [][]cell, cr, cc int) {
+	rows = [][]cell{{}}
+	col := 0
+	for i, c := range cells {
+		if i == pos {
+			cr, cc = len(rows)-1, col
+		}
+		if c.s == "\n" {
+			rows = append(rows, []cell{})
+			col = 0
+			continue
+		}
+		if col+c.w > n {
+			rows = append(rows, []cell{})
+			col = 0
+			if i == pos {
+				cr, cc = len(rows)-1, 0
+			}
+		}
+		rows[len(rows)-1] = append(rows[len(rows)-1], c)
+		col += c.w
+	}
+	if pos >= len(cells) {
+		cr, cc = len(rows)-1, col
+		if col >= n {
+			rows = append(rows, []cell{})
+			cr, cc = len(rows)-1, 0
+		}
+	}
+	return
+}
+
+// render redraws the input in place. final=true leaves a plain "› text" record
+// (no box, ghost or hint) so the scrollback stays clean.
 func (e *Editor) render(final bool) {
 	W := termWidth()
+	boxed := e.Boxed && W >= 30 && color
+	glyph := e.prompt
+	if e.Glyph != nil {
+		glyph = e.Glyph(string(e.buf))
+	}
+	if boxed && final {
+		glyph = "  " + glyph // line up with the box in the scrollback
+	}
+	pw := width(glyph)
+	n := W - 1 - pw // text columns per row
+	BW := min(W-3, 110) // box width, same as the welcome card
+	if boxed {
+		n = BW - 4 - pw
+	}
+	if n < 5 {
+		n = 5
+	}
+	cells := make([]cell, 0, len(e.buf)+16)
+	for _, r := range e.buf {
+		if r == '\n' && !final {
+			cells = append(cells, cell{Weak("↵"), 1}, cell{"\n", 0})
+			continue
+		}
+		if r == '\n' {
+			cells = append(cells, cell{"\n", 0})
+			continue
+		}
+		s, w := dispRune(r)
+		cells = append(cells, cell{s, w})
+	}
+	// cursor index in cells (newlines take two cells while editing)
+	pos := 0
+	for i := 0; i < e.pos && i < len(e.buf); i++ {
+		pos++
+		if e.buf[i] == '\n' && !final {
+			pos++
+		}
+	}
+	nText := len(cells)
+	if !final {
+		extra := e.ghost()
+		if extra == "" && len(e.buf) == 0 {
+			extra = e.Placeholder
+		}
+		for _, r := range extra {
+			_, w := dispRune(r)
+			cells = append(cells, cell{Weak(string(r)), w})
+		}
+	}
+	rows, cr, cc := layout(cells, n, pos)
+	_ = nText
+	if final {
+		pos = len(cells)
+	}
+
 	var sb strings.Builder
 	if e.curRow > 0 {
 		fmt.Fprintf(&sb, "\x1b[%dA", e.curRow)
 	}
 	sb.WriteString("\r\x1b[J")
-	sb.WriteString(e.prompt)
-	cols := width(e.prompt)
-	curCols := cols
-	for i, r := range e.buf {
-		if i == e.pos {
-			curCols = cols
-		}
-		s, w := dispRune(r)
-		// a wide rune never splits across the edge
-		if w == 2 && (cols%W) == W-1 {
-			sb.WriteString(" ")
-			cols++
-		}
-		if r == '\n' || r == '\t' {
-			sb.WriteString(s + fg(pal.ink))
+	line := func(i int, r []cell) string {
+		var b strings.Builder
+		if i == 0 {
+			b.WriteString(glyph)
 		} else {
-			sb.WriteString(s)
+			b.WriteString(strings.Repeat(" ", pw))
 		}
-		cols += w
-	}
-	if e.pos >= len(e.buf) {
-		curCols = cols
-	}
-	if !final {
-		if g := e.ghost(); g != "" {
-			g = clip(g, W-(cols%W)-1)
-			sb.WriteString(Weak(g))
-			cols += width(g)
-		} else if len(e.buf) == 0 && e.Placeholder != "" {
-			p := clip(e.Placeholder, W-cols-1)
-			sb.WriteString(Weak(p))
-			cols += width(p)
+		b.WriteString(fg(pal.ink))
+		w := 0
+		for _, c := range r {
+			b.WriteString(c.s)
+			if strings.HasPrefix(c.s, "\x1b") {
+				b.WriteString(fg(pal.ink))
+			}
+			w += c.w
 		}
-	}
-	sb.WriteString(reset())
-	if cols > 0 && cols%W == 0 {
-		sb.WriteString(" \r\x1b[K") // settle the pending wrap
-	}
-	endRow := cols / W
-	row, col := curCols/W, curCols%W
-	if endRow > row {
-		fmt.Fprintf(&sb, "\x1b[%dA", endRow-row)
-	}
-	sb.WriteString("\r")
-	if col > 0 {
-		fmt.Fprintf(&sb, "\x1b[%dC", col)
-	}
-	e.curRow = row
-	if final {
-		// leave the cursor after the text so the next output starts below it
-		if endRow > row {
-			fmt.Fprintf(&sb, "\x1b[%dB", endRow-row)
+		b.WriteString(reset())
+		if boxed && !final {
+			b.WriteString(strings.Repeat(" ", max(0, n-w)))
 		}
-		e.curRow = endRow
+		return b.String()
+	}
+	if boxed && !final {
+		sb.WriteString("  " + hair("┌"+strings.Repeat("─", BW-2)+"┐") + "\r\n")
+		for i, r := range rows {
+			sb.WriteString("  " + hair("│") + " " + line(i, r) + " " + hair("│") + "\r\n")
+		}
+		sb.WriteString("  " + hair("└"+strings.Repeat("─", BW-2)+"┘"))
+		if e.Footer != nil {
+			if f := e.Footer(string(e.buf)); f != "" {
+				sb.WriteString("\r\n" + clipStyled(f, W-2))
+			}
+		}
+		total := 1 + len(rows) + 1 // rows from top border to bottom border
+		if e.Footer != nil && e.Footer(string(e.buf)) != "" {
+			total++
+		}
+		target := 1 + cr
+		fmt.Fprintf(&sb, "\x1b[%dA\r", total-1-target)
+		fmt.Fprintf(&sb, "\x1b[%dC", 4+pw+cc)
+		e.curRow = target
+	} else {
+		for i, r := range rows {
+			if i > 0 {
+				sb.WriteString("\r\n")
+			}
+			sb.WriteString(line(i, r))
+		}
+		if final {
+			e.curRow = len(rows) - 1
+		} else {
+			if up := len(rows) - 1 - cr; up > 0 {
+				fmt.Fprintf(&sb, "\x1b[%dA", up)
+			}
+			sb.WriteString("\r")
+			if c := pw + cc; c > 0 {
+				fmt.Fprintf(&sb, "\x1b[%dC", c)
+			}
+			e.curRow = cr
+		}
 	}
 	Printf("%s", sb.String())
+}
+
+// atComplete completes an @path under the cursor. It reports whether it acted.
+func (e *Editor) atComplete() bool {
+	start := e.pos
+	for start > 0 && e.buf[start-1] != ' ' && e.buf[start-1] != '\n' {
+		start--
+	}
+	word := string(e.buf[start:e.pos])
+	if !strings.HasPrefix(word, "@") {
+		return false
+	}
+	frag := word[1:]
+	dir, base := filepath.Split(frag)
+	look := dir
+	if look == "" {
+		look = "."
+	}
+	if strings.HasPrefix(look, "~") {
+		h, _ := os.UserHomeDir()
+		look = h + look[1:]
+	}
+	ents, err := os.ReadDir(look)
+	if err != nil {
+		return true
+	}
+	var ms []string
+	for _, en := range ents {
+		nm := en.Name()
+		if strings.HasPrefix(nm, ".") && !strings.HasPrefix(base, ".") {
+			continue
+		}
+		if strings.HasPrefix(nm, base) {
+			if en.IsDir() {
+				nm += "/"
+			}
+			ms = append(ms, nm)
+		}
+	}
+	if len(ms) == 0 {
+		return true
+	}
+	p := ms[0]
+	for _, c := range ms[1:] {
+		for !strings.HasPrefix(c, p) {
+			p = p[:len(p)-1]
+		}
+	}
+	if len(ms) == 1 && !strings.HasSuffix(p, "/") {
+		p += " "
+	}
+	if len(p) > len(base) {
+		e.insert([]rune(p[len(base):]))
+		return true
+	}
+	e.render(true)
+	var parts []string
+	for i, c := range ms {
+		if i == 24 {
+			parts = append(parts, Weak(fmt.Sprintf("+%d more", len(ms)-24)))
+			break
+		}
+		parts = append(parts, Accent(c))
+	}
+	Printf("\r\n  %s\r\n", strings.Join(parts, Weak("  ")))
+	e.curRow = 0
+	return true
 }
 
 func clip(s string, n int) string {

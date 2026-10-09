@@ -16,7 +16,7 @@ const service = "blaze-cli"
 
 type Provider struct {
 	ID, Name, BaseURL, DefaultModel, KeyHint, KeyPage, Env string
-	Free                                                bool
+	Free                                                   bool
 }
 
 // Providers mirrors the Android app's list (all OpenAI-compatible).
@@ -50,14 +50,14 @@ type Entry struct {
 }
 
 type Config struct {
-	Chain        []Entry           `json:"chain"`          // tried in order; first healthy one answers
-	Keys         map[string]string `json:"keys,omitempty"` // only when no keychain is available
-	AutoApprove  bool              `json:"auto_approve"`   // --yolo default
-	SetupDone    bool              `json:"setup_done"`
-	MaxSteps     int               `json:"max_steps"`
-	Persona      string            `json:"persona,omitempty"`
-	NoKeyless    bool              `json:"no_keyless,omitempty"` // don't fall back to the keyless model
-	path         string
+	Chain       []Entry           `json:"chain"`          // tried in order; first healthy one answers
+	Keys        map[string]string `json:"keys,omitempty"` // only when no keychain is available
+	AutoApprove bool              `json:"auto_approve"`   // --yolo default
+	SetupDone   bool              `json:"setup_done"`
+	MaxSteps    int               `json:"max_steps"`
+	Persona     string            `json:"persona,omitempty"`
+	NoKeyless   bool              `json:"no_keyless,omitempty"` // don't fall back to the keyless model
+	path        string
 }
 
 func Dir() string {

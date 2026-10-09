@@ -281,7 +281,7 @@ type health struct {
 }
 
 var (
-	hmu    sync.Mutex
+	hmu     sync.Mutex
 	health_ = map[string]*health{}
 )
 

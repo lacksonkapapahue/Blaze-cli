@@ -18,13 +18,23 @@ import (
 
 // Env is what tools need from the host: the PC profile and a way to ask the user.
 type Env struct {
-	Info     *sysinfo.Info
-	Root     string // the folder Blaze was started in (the "project")
-	Yolo     bool
-	Confirm  func(title, detail string) bool
-	Status   func(line string) // one-line progress ("Running: npm test")
-	Shell    *Shell
-	Jobs     *Jobs
+	Info    *sysinfo.Info
+	Root    string // the folder Blaze was started in (the "project")
+	Yolo    bool
+	Confirm func(title, detail string) bool
+	Status  func(line string) // one-line progress ("Running: npm test")
+	Shell   *Shell
+	Jobs    *Jobs
+	Plan    bool                             // plan mode: look, don't touch
+	OnDiff  func(path, before, after string) // show a file change
+	OnTodo  func(items []Todo)               // show the task checklist
+}
+
+// changes lists the tools that alter the PC; plan mode blocks them.
+var changes = map[string]bool{
+	"run_shell": true, "file_write": true, "file_edit": true, "file_delete": true,
+	"run_code": true, "install_tool": true, "schedule": true, "download_file": true,
+	"job_input": true, "job_stop": true, "http_request": true, "git": true,
 }
 
 type handler func(e *Env, a args) string
@@ -123,6 +133,9 @@ func Run(e *Env, name, rawArgs string) (out string) {
 			out = fmt.Sprintf("Error in %s: %v\nFix: check the arguments and try again, or take a different approach.", name, r)
 		}
 	}()
+	if e.Plan && changes[name] && !(name == "git" && readOnlyGit(a.s("args"))) {
+		return "Plan mode is on, so nothing can be changed yet. Keep investigating with file_read, file_list, file_search, web_search, then finish with a numbered plan. The user switches modes to let you act."
+	}
 	out = d.run(e, a)
 	if strings.TrimSpace(out) == "" {
 		out = name + " finished with no output."
@@ -175,3 +188,21 @@ func dataDir(sub string) string {
 }
 
 func isWindows() bool { return runtime.GOOS == "windows" }
+
+func readOnlyGit(args string) bool {
+	f := strings.Fields(args)
+	if len(f) == 0 {
+		return false
+	}
+	switch f[0] {
+	case "status", "log", "diff", "show", "branch", "remote", "blame", "ls-files", "rev-parse":
+		return len(f) == 1 || f[0] != "branch" || !strings.HasPrefix(f[1], "-d")
+	}
+	return false
+}
+
+func (e *Env) diff(path, before, after string) {
+	if e.OnDiff != nil && before != after {
+		e.OnDiff(rel(e, path), before, after)
+	}
+}

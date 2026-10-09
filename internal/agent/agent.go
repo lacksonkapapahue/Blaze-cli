@@ -21,6 +21,7 @@ type Agent struct {
 	History []llm.Message
 	Quiet   bool // one-shot / scheduled: no spinner
 	spin    *ui.Spinner
+	diffed  bool // a diff was drawn for the current tool call
 }
 
 func New(cfg *config.Config, info *sysinfo.Info, cwd string, yolo bool) *Agent {
@@ -35,6 +36,25 @@ func New(cfg *config.Config, info *sysinfo.Info, cwd string, yolo bool) *Agent {
 	a.Env.Confirm = func(title, detail string) bool {
 		a.spin.Stop()
 		return ui.Confirm(title, detail)
+	}
+	a.Env.OnDiff = func(path, before, after string) {
+		if a.Quiet {
+			return
+		}
+		a.spin.Stop()
+		ui.Diff(path, before, after)
+		a.diffed = true
+	}
+	a.Env.OnTodo = func(items []tools.Todo) {
+		if a.Quiet {
+			return
+		}
+		a.spin.Stop()
+		rows := make([]ui.TodoRow, len(items))
+		for i, t := range items {
+			rows[i] = ui.TodoRow{Text: t.Text, Status: t.Status}
+		}
+		ui.Todos(rows)
 	}
 	a.Env.Status = func(s string) {
 		if a.Quiet {
@@ -59,6 +79,15 @@ RULES
 - Answers: short and direct, plain Markdown. Lead with the result. Use numbered steps only for real sequences.
 - Stay in the folder the user started in unless they point elsewhere.
 `)
+	b.WriteString(`- For tasks with 3+ steps, keep a checklist with todo_write and update it as you go.
+- The user can attach files as <file path=...> blocks and run shell commands themselves (shown as <shell> blocks); use what they contain.
+`)
+	if a.Env.Plan {
+		b.WriteString("\nPLAN MODE IS ON\nDon't change anything: no writes, edits, installs or commands that alter state (those tools are blocked). Read and investigate, then answer with a short numbered plan of exactly what you'll change and how you'll check it. Stop there; the user approves before you act.\n")
+	}
+	if pi := ProjectInstructions(a.Env.Root); pi != "" {
+		b.WriteString("\nPROJECT INSTRUCTIONS (BLAZE.md)\n" + pi + "\n")
+	}
 	if a.Cfg.Persona != "" {
 		b.WriteString("\nSTYLE\n" + a.Cfg.Persona + "\n")
 	}
@@ -136,9 +165,11 @@ func (a *Agent) Ask(ctx context.Context, prompt string) (string, error) {
 				a.spin.Start(describe(tc))
 			}
 			t0 := time.Now()
+			a.diffed = false
 			res := tools.Run(a.Env, tc.Function.Name, tc.Function.Arguments)
 			a.spin.Stop()
-			if !a.Quiet {
+			quietStep := tc.Function.Name == "todo_write" || (a.diffed && succeeded(res))
+			if !a.Quiet && !quietStep {
 				ui.StepDone(succeeded(res), describe(tc), summarize(res), time.Since(t0))
 			}
 			a.History = append(a.History, llm.Message{Role: "tool", ToolCallID: tc.ID, Name: tc.Function.Name, Content: res})
@@ -193,7 +224,7 @@ func succeeded(res string) bool {
 	t := strings.TrimSpace(res)
 	low := strings.ToLower(t)
 	switch {
-	case strings.HasPrefix(t, "Error"), strings.HasPrefix(t, "Refused"), strings.HasPrefix(low, "declined"), strings.Contains(low, "did not approve"):
+	case strings.HasPrefix(t, "Error"), strings.HasPrefix(t, "Refused"), strings.HasPrefix(t, "Plan mode is on"), strings.HasPrefix(low, "declined"), strings.Contains(low, "did not approve"):
 		return false
 	case strings.HasPrefix(t, "exit ") && !strings.HasPrefix(t, "exit 0"):
 		return false
@@ -222,6 +253,6 @@ func (a *Agent) trim() {
 	a.History = a.History[cut:]
 }
 
-func (a *Agent) Reset() { a.History = nil }
+func (a *Agent) Reset() { a.History = nil; tools.ResetTodos() }
 
 func (a *Agent) Close() { a.Env.Jobs.StopAll() }

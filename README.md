@@ -34,6 +34,18 @@ Blaze checks for a new version at most once a day and mentions it under the bann
 Flags: `--yolo` (skip approvals; deletes still ask), `--model provider/model`.
 In chat: `/clear /model /yolo /jobs /schedule /pc /doctor /setup /exit`. Ctrl-C stops the running task.
 
+### Harness (borrowed from Claude Code)
+| | |
+|---|---|
+| **Shift+Tab** | cycle modes: ask first → auto-approve → **plan mode** (look and propose, nothing changes; then approve the plan to run it) |
+| **Checklist** | for multi-step work Blaze keeps a live plan card (■ done · ▸ doing · □ to do) |
+| **Diffs** | every file write or edit shows a coloured diff with +/- counts |
+| `@path` | attach a file or folder to your message (Tab completes paths) |
+| `!command` | run a command yourself; Blaze sees the output |
+| `#note` | save a note to Blaze's memory |
+| `BLAZE.md` | project instructions loaded every session (`AGENTS.md` / `CLAUDE.md` also work; `~/.blaze/BLAZE.md` is global). `/init` writes one |
+| `/compact` | summarise the chat to free context · `/resume` or `blaze -c` continues this folder's last chat |
+
 ### Keys at the prompt
 | Key | Does |
 |---|---|

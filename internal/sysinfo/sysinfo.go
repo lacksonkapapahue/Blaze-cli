@@ -19,16 +19,16 @@ import (
 )
 
 type Info struct {
-	OS          string            `json:"os"`           // windows, darwin, linux
-	OSName      string            `json:"os_name"`      // "Windows 11 Pro 23H2", "macOS 15.1", "Ubuntu 24.04 LTS"
-	Arch        string            `json:"arch"`         // amd64, arm64
+	OS          string            `json:"os"`      // windows, darwin, linux
+	OSName      string            `json:"os_name"` // "Windows 11 Pro 23H2", "macOS 15.1", "Ubuntu 24.04 LTS"
+	Arch        string            `json:"arch"`    // amd64, arm64
 	Hostname    string            `json:"hostname"`
 	User        string            `json:"user"`
 	CPU         string            `json:"cpu"`
 	Cores       int               `json:"cores"`
 	RAMGB       float64           `json:"ram_gb"`
 	GPU         []string          `json:"gpu"`
-	Shell       string            `json:"shell"`       // bash, zsh, powershell, pwsh, cmd, fish, sh
+	Shell       string            `json:"shell"` // bash, zsh, powershell, pwsh, cmd, fish, sh
 	ShellPath   string            `json:"shell_path"`
 	PkgManagers []string          `json:"pkg_managers"` // winget, choco, scoop, brew, apt, dnf, pacman, zypper, apk
 	Tools       map[string]string `json:"tools"`        // name -> version (installed only)
@@ -91,7 +91,9 @@ func Detect() Info {
 			if v == "" {
 				v = "installed"
 			}
-			mu.Lock(); in.Tools[t[0]] = v; mu.Unlock()
+			mu.Lock()
+			in.Tools[t[0]] = v
+			mu.Unlock()
 		})
 	}
 	for _, p := range pkgList {
