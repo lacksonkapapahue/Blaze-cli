@@ -1,0 +1,42 @@
+name: build
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+      - name: Vet
+        run: |
+          for t in linux/amd64 windows/amd64 darwin/arm64; do GOOS=${t%/*} GOARCH=${t#*/} go vet ./...; done
+      - name: Build all platforms
+        run: |
+          V=$(cat VERSION)
+          mkdir -p dist
+          for t in windows/amd64 windows/arm64 darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
+            os=${t%/*}; arch=${t#*/}; ext=""; [ "$os" = windows ] && ext=".exe"
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=v$V" -o dist/blaze-$os-$arch$ext .
+          done
+          cp install.sh install.ps1 dist/
+          ls -l dist
+      - name: Smoke test
+        run: ./dist/blaze-linux-amd64 version && ./dist/blaze-linux-amd64 pc
+      - uses: actions/upload-artifact@v4
+        with:
+          name: blaze-cli
+          path: dist/
+          retention-days: 14
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          V=v$(cat VERSION)
+          gh release delete "$V" -y --cleanup-tag 2>/dev/null || true
+          gh release create "$V" dist/* --title "Blaze CLI $V" --notes "Blaze CLI $V. Install: see README." --latest
