@@ -13,15 +13,16 @@ mkdir -p "$dir"
 printf '\n  \033[38;2;107;140;255m■\033[0m  \033[1mB L A Z E\033[0m  installer\n     %s/%s → %s\n\n' "$os" "$arch" "$dir"
 if [ -n "$GITHUB_TOKEN" ]; then
   id=$(curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" "https://api.github.com/repos/$REPO/releases/latest" \
-    | tr ',' '\n' | grep -B3 "\"name\": *\"$asset\"" | grep '"id"' | head -1 | tr -dc '0-9')
-  curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/octet-stream" \
+    | tr -d ' \n\r' | sed -n "s/.*\"id\":\([0-9]*\),\"node_id\":\"[^\"]*\",\"name\":\"$asset\".*/\1/p")
+  [ -n "$id" ] || { echo "  Couldn't find $asset in the latest release (check GITHUB_TOKEN)."; exit 1; }
+  curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" -L -H "Accept: application/octet-stream" \
     "https://api.github.com/repos/$REPO/releases/assets/$id" -o "$dir/blaze"
 else
   curl -fsSL "https://github.com/$REPO/releases/latest/download/$asset" -o "$dir/blaze"
 fi
 chmod +x "$dir/blaze"
 case ":$PATH:" in *":$dir:"*) ;; *)
-  for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do [ -f "$rc" ] && echo "export PATH=\"$dir:\$PATH\"" >> "$rc"; done
+  for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do [ -f "$rc" ] && { echo "export PATH=\"$dir:\$PATH\"" >> "$rc" || true; }; done
   export PATH="$dir:$PATH"
   echo "  Added $dir to your PATH (open a new terminal to use it everywhere)." ;;
 esac
