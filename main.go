@@ -42,6 +42,7 @@ func usage() {
 		ui.Accent("blaze learn [on|off]") + ui.Sub("           learn memories and skills automatically"),
 		ui.Accent("blaze login") + ui.Sub(" · ") + ui.Accent("logout") + ui.Sub(" · ") + ui.Accent("whoami") + ui.Sub("    your Blaze account (shared with Desktop)"),
 		ui.Accent("blaze connect [app]") + ui.Sub("            connect Google, GitHub, Notion, Slack…"),
+		ui.Accent("blaze mcp list|add|remove") + ui.Sub("      MCP servers (blaze mcp help)"),
 		ui.Accent("blaze keys [sync]") + ui.Sub("              your model keys (shared with Desktop and your phone)"),
 		ui.Accent("blaze update") + ui.Sub("                   get the newest Blaze"),
 		ui.Accent("blaze version"),
@@ -123,7 +124,14 @@ func main() {
 		setup.Run(cfg, &in)
 		return
 	case "doctor":
+		setup.DoctorExtra = mcpDoctor
 		setup.Doctor(cfg, sysinfo.Detect(), version)
+		return
+	case "mcp":
+		if err := cmdMCP(rest[1:], false); err != nil {
+			fail(err.Error())
+			os.Exit(1)
+		}
 		return
 	case "schedule":
 		sub := ""
@@ -173,6 +181,8 @@ func main() {
 	seedSkills() // bundled skill library (skills_cmd.go)
 	a := agent.New(cfg, &in, cwd, yolo)
 	defer a.Close()
+	startMCP() // servers connect in the background; their tools join when ready
+	defer stopMCP()
 	if p := loadPrefs(); !yolo && !plan {
 		a.Env.Plan = p.WorkMode == "plan"
 		if p.Approval == "autopilot" {
@@ -196,6 +206,7 @@ func main() {
 		defer stop()
 		if _, err := a.Ask(ctx, prompt); err != nil {
 			ui.Println("\n  " + ui.Ink("■ ") + ui.Sub(err.Error()))
+			stopMCP()
 			os.Exit(1)
 		}
 		return
@@ -222,7 +233,7 @@ func accountCmd(cmd string, args []string) error {
 	return nil
 }
 
-var slashCmds = []string{"/agents", "/auto", "/autopilot", "/build", "/clear", "/compact", "/connect", "/disconnect", "/doctor", "/exit", "/help", "/init", "/jobs", "/keys", "/learn", "/login", "/logout", "/model", "/new", "/notify", "/pc", "/plan", "/quit", "/resume", "/schedule", "/setup", "/skills", "/update", "/whoami", "/yolo"}
+var slashCmds = []string{"/agents", "/auto", "/autopilot", "/build", "/clear", "/compact", "/connect", "/disconnect", "/doctor", "/exit", "/help", "/init", "/jobs", "/keys", "/learn", "/login", "/logout", "/mcp", "/model", "/new", "/notify", "/pc", "/plan", "/quit", "/resume", "/schedule", "/setup", "/skills", "/update", "/whoami", "/yolo"}
 
 // welcomeWhere is the start screen's context line (OS · shell · folder), kept so
 // /clear can draw the same start screen again.
@@ -525,6 +536,7 @@ func help() {
 		ui.Accent("/auto") + ui.Sub("      risky actions ask   ") + ui.Accent("/autopilot") + ui.Sub(" nothing asks (catastrophic stays blocked)"),
 		ui.Accent("/agents") + ui.Sub("    background agents: list · <name> · msg · cancel · resume · discard · new"),
 		ui.Accent("/login") + ui.Sub("     Blaze account   ") + ui.Accent("/whoami") + ui.Sub("   ") + ui.Accent("/logout") + ui.Sub("   ") + ui.Accent("/connect") + ui.Sub(" [app]   ") + ui.Accent("/keys") + ui.Sub(" [sync]"),
+		ui.Accent("/mcp") + ui.Sub("       MCP servers: status · reload · add · remove · enable|disable NAME"),
 		ui.Accent("/model") + ui.Sub("     pick the model Blaze uses (saved)"),
 		ui.Accent("/skills") + ui.Sub("    skill library: list · <name> · on|off|delete|restore <name>   ") + ui.Accent("/learn") + ui.Sub(" [on|off]"),
 		ui.Accent("/jobs") + ui.Sub("      background jobs   ") + ui.Accent("/schedule") + ui.Sub(" scheduled jobs"),
@@ -618,7 +630,12 @@ func slash(a *agent.Agent, bg *bgAgents, line string, run func(string)) bool {
 	case "/pc":
 		setup.ShowPC(*a.Env.Info)
 	case "/doctor":
+		setup.DoctorExtra = mcpDoctor
 		setup.Doctor(a.Cfg, *a.Env.Info, version)
+	case "/mcp":
+		if err := cmdMCP(f[1:], true); err != nil {
+			fail(err.Error())
+		}
 	case "/setup":
 		setup.Run(a.Cfg, a.Env.Info)
 	case "/update":

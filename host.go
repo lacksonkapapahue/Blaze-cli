@@ -104,15 +104,18 @@ func wire(a *agent.Agent, interactive bool) *bgAgents {
 			ts = append(ts, updateBlazeTool())
 		}
 		ts = append(ts, notifyTool())
-		return append(ts, getConns().Tools()...)
+		ts = append(ts, getConns().Tools()...)
+		return append(ts, getMCP().Tools()...)
 	}
-	a.ReadOnly = func(name string) bool { return getConns().ReadOnly(name) || (bg != nil && leadPlanAllows[name]) }
+	a.ReadOnly = func(name string) bool {
+		return getConns().ReadOnly(name) || getMCP().ReadOnly(name) || (bg != nil && leadPlanAllows[name])
+	}
 	a.ExtraSystem = func() string {
 		s := ""
 		if bg != nil {
 			s += agents.Delegation + agents.Orchestration + mainChat
 		}
-		return s + getConns().PromptBlock()
+		return s + getConns().PromptBlock() + getMCP().Summary()
 	}
 	a.Handle = func(ctx context.Context, name, args string) (string, bool) {
 		switch {
@@ -123,6 +126,8 @@ func wire(a *agent.Agent, interactive bool) *bgAgents {
 			return selfUpdate(bg), true
 		case name == "notify":
 			return runNotify(args), true
+		case getMCP().Handles(name): // before connectors: they claim every "mcp_" name
+			return getMCP().Call(ctx, name, args, mcpPolicy(a)), true
 		case getConns().Handles(name):
 			return getConns().Run(ctx, name, args), true
 		}
@@ -195,6 +200,7 @@ func restartNow(a *agent.Agent, bg *bgAgents) {
 	}
 	a.Save()
 	a.Close()
+	stopMCP()
 	ui.Println("  " + ui.Accent("■ ") + ui.Ink("Restarting Blaze…"))
 	ui.FocusReporting(false)
 	ui.ShowCursor()

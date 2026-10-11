@@ -1,0 +1,345 @@
+package main
+
+// MCP servers: `blaze mcp …`, `/mcp` in chat, the doctor check, and the wiring
+// that offers the servers' tools to the agent (see internal/mcp). Servers live
+// in ~/.blaze/mcp.json (shared with Blaze Desktop) plus the folder's
+// .mcp.json and .blaze/mcp.json.
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/lacksonkapapahue/blaze-cli/internal/agent"
+	"github.com/lacksonkapapahue/blaze-cli/internal/config"
+	"github.com/lacksonkapapahue/blaze-cli/internal/mcp"
+	"github.com/lacksonkapapahue/blaze-cli/internal/ui"
+)
+
+var (
+	mcpOnce sync.Once
+	mcpMgr  *mcp.Manager
+)
+
+// getMCP is this session's MCP manager (servers start with startMCP).
+func getMCP() *mcp.Manager {
+	mcpOnce.Do(func() {
+		cwd, _ := os.Getwd()
+		mcpMgr = mcp.New(config.Dir(), cwd, version)
+		mcpMgr.Log = func(s string) {
+			ui.Above("  " + ui.Accent("■ ") + ui.Sub(s) + ui.Weak(" · /mcp for details"))
+		}
+	})
+	return mcpMgr
+}
+
+// startMCP launches the configured servers in the background, so startup isn't slowed.
+func startMCP() { getMCP().Start() }
+
+// stopMCP stops every server (on exit and before a restart).
+func stopMCP() {
+	if mcpMgr != nil {
+		mcpMgr.Close()
+	}
+}
+
+// mcpPolicy is how the agent's MCP calls are gated: Plan refuses tools that
+// aren't read-only, Auto asks with the usual approval prompt (with "Always
+// allow"), Autopilot runs them.
+func mcpPolicy(a *agent.Agent) mcp.Policy {
+	return mcp.Policy{
+		Plan:      a.Env.Plan,
+		Autopilot: a.Autopilot(),
+		Ask: func(ctx context.Context, title, detail string) (bool, bool) {
+			a.StopSpinner()
+			return confirmHook(ctx, title, detail, true)
+		},
+	}
+}
+
+// ---------------- blaze mcp ----------------
+
+func mcpUsage() {
+	ui.Box(ui.AccentLabel("mcp"), []string{
+		ui.Accent("blaze mcp list") + ui.Sub("                          servers, whether they start, their tools"),
+		ui.Accent("blaze mcp add NAME -- CMD ARGS…") + ui.Sub("        a local server (stdio); --env K=V before --"),
+		ui.Accent("blaze mcp add NAME --url URL") + ui.Sub("           a remote server; --header K=V (repeatable)"),
+		ui.Accent("blaze mcp remove NAME") + ui.Sub("                  remove it (and its \"Always allow\" choices)"),
+		ui.Accent("blaze mcp enable|disable NAME") + ui.Sub("          turn it on or off"),
+		ui.Weak("--project: write ./.blaze/mcp.json, not ~/.blaze/mcp.json (shared with Desktop)"),
+	})
+}
+
+// cmdMCP is `blaze mcp …`; inChat is true for /mcp (which then restarts the servers).
+func cmdMCP(args []string, inChat bool) error {
+	cwd, _ := os.Getwd()
+	home := config.Dir()
+	if len(args) == 0 {
+		if inChat {
+			mcpStatus(getMCP(), false)
+			return nil
+		}
+		args = []string{"list"}
+	}
+	sub, rest := args[0], args[1:]
+	changed := false
+	switch sub {
+	case "list", "ls", "status":
+		m := getMCP()
+		if !inChat {
+			m.Log = nil // the box below says what failed
+			m.Start()
+			defer m.Close()
+		}
+		mcpStatus(m, !inChat)
+		return nil
+	case "add":
+		s, project, err := parseMCPAdd(rest)
+		if err != nil {
+			return err
+		}
+		file := mcp.GlobalFile(home)
+		if project {
+			file = filepath.Join(cwd, ".blaze", "mcp.json")
+		}
+		if err := mcp.Add(file, s); err != nil {
+			return err
+		}
+		ui.StepDone(true, "Added MCP server "+s.Name, shortPath(file), 0)
+		changed = true
+	case "remove", "rm", "delete":
+		if len(rest) == 0 {
+			return errors.New("use: blaze mcp remove NAME")
+		}
+		name := rest[0]
+		file := mcp.FileDefining(home, cwd, name)
+		if file == "" {
+			return errors.New("there's no MCP server called " + name + "; `blaze mcp list` shows them")
+		}
+		if _, err := mcp.Remove(file, name); err != nil {
+			return err
+		}
+		_ = getMCP().Forget(name)
+		ui.StepDone(true, "Removed MCP server "+name, shortPath(file), 0)
+		changed = true
+	case "enable", "disable", "on", "off":
+		if len(rest) == 0 {
+			return errors.New("use: blaze mcp " + sub + " NAME")
+		}
+		name := rest[0]
+		file := mcp.FileDefining(home, cwd, name)
+		if file == "" {
+			return errors.New("there's no MCP server called " + name + "; `blaze mcp list` shows them")
+		}
+		off := sub == "disable" || sub == "off"
+		if _, err := mcp.SetDisabled(file, name, off); err != nil {
+			return err
+		}
+		ui.StepDone(true, map[bool]string{true: "Turned off ", false: "Turned on "}[off]+name, shortPath(file), 0)
+		changed = true
+	case "reload", "restart":
+		if !inChat {
+			return errors.New("reload is for /mcp in chat; servers start fresh every time you run blaze")
+		}
+		changed = true
+	case "help", "-h", "--help":
+		mcpUsage()
+		return nil
+	default:
+		mcpUsage()
+		return errors.New("unknown mcp command " + sub)
+	}
+	if changed && inChat {
+		var sp ui.Spinner
+		sp.Start("Restarting MCP servers")
+		m := getMCP()
+		m.Reload()
+		m.Wait(15 * time.Second)
+		sp.Stop()
+		mcpStatus(m, false)
+	}
+	return nil
+}
+
+// parseMCPAdd reads `NAME [--project] [--env K=V]… -- CMD ARGS…` or
+// `NAME --url URL [--header K=V]…`.
+func parseMCPAdd(a []string) (mcp.Server, bool, error) {
+	var s mcp.Server
+	project := false
+	if len(a) == 0 || strings.HasPrefix(a[0], "-") {
+		return s, false, errors.New("use: blaze mcp add NAME -- COMMAND ARGS…  or  blaze mcp add NAME --url URL")
+	}
+	s.Name = a[0]
+	kv := func(v, what string) (string, string, error) {
+		k, val, ok := strings.Cut(v, "=")
+		if !ok || strings.TrimSpace(k) == "" {
+			// Also accept "Header: value".
+			if k2, v2, ok2 := strings.Cut(v, ":"); ok2 && what == "header" {
+				return strings.TrimSpace(k2), strings.TrimSpace(v2), nil
+			}
+			return "", "", fmt.Errorf("--%s wants KEY=VALUE, got %q", what, v)
+		}
+		return strings.TrimSpace(k), val, nil
+	}
+	for i := 1; i < len(a); i++ {
+		x := a[i]
+		next := func() (string, error) {
+			if i+1 >= len(a) {
+				return "", errors.New(x + " needs a value")
+			}
+			i++
+			return a[i], nil
+		}
+		switch {
+		case x == "--":
+			if i+1 >= len(a) {
+				return s, false, errors.New("give the server's command after --")
+			}
+			s.Command, s.Args = a[i+1], append([]string{}, a[i+2:]...)
+			i = len(a)
+		case x == "--url" || strings.HasPrefix(x, "--url="):
+			v, err := flagVal(x, "--url", next)
+			if err != nil {
+				return s, false, err
+			}
+			s.URL = v
+		case x == "--header" || x == "-H" || strings.HasPrefix(x, "--header="):
+			v, err := flagVal(x, "--header", next)
+			if err != nil {
+				return s, false, err
+			}
+			k, val, err := kv(v, "header")
+			if err != nil {
+				return s, false, err
+			}
+			if s.Headers == nil {
+				s.Headers = map[string]string{}
+			}
+			s.Headers[k] = val
+		case x == "--env" || x == "-e" || strings.HasPrefix(x, "--env="):
+			v, err := flagVal(x, "--env", next)
+			if err != nil {
+				return s, false, err
+			}
+			k, val, err := kv(v, "env")
+			if err != nil {
+				return s, false, err
+			}
+			if s.Env == nil {
+				s.Env = map[string]string{}
+			}
+			s.Env[k] = val
+		case x == "--project":
+			project = true
+		default:
+			return s, false, fmt.Errorf("unexpected %q: put the server's command after --", x)
+		}
+	}
+	if s.URL != "" && s.Command != "" {
+		return s, false, errors.New("give either --url or a command after --, not both")
+	}
+	if s.URL == "" && s.Command == "" {
+		return s, false, errors.New("give the server's command after -- (blaze mcp add NAME -- npx -y some-server) or --url URL")
+	}
+	if s.URL != "" && !strings.HasPrefix(s.URL, "http://") && !strings.HasPrefix(s.URL, "https://") {
+		return s, false, errors.New("--url must start with http:// or https://")
+	}
+	return s, project, mcp.ValidName(s.Name)
+}
+
+func flagVal(x, flag string, next func() (string, error)) (string, error) {
+	if v, ok := strings.CutPrefix(x, flag+"="); ok {
+		return v, nil
+	}
+	return next()
+}
+
+// mcpStatus prints each server: connected (tools), failed (why), disabled.
+// wait is true for `blaze mcp list` (start them and wait for the answer).
+func mcpStatus(m *mcp.Manager, wait bool) {
+	if wait {
+		var sp ui.Spinner
+		sp.Start("Starting MCP servers")
+		m.Wait(mcp.InitTimeout + 5*time.Second)
+		sp.Stop()
+	}
+	for _, w := range m.Warnings() {
+		ui.Println("  " + ui.Ink("■ ") + ui.Sub(w))
+	}
+	sts := m.States()
+	if len(sts) == 0 {
+		ui.Box(ui.AccentLabel("mcp servers"), []string{
+			ui.Sub("No MCP servers yet. Add one:"),
+			ui.Accent("blaze mcp add github -- npx -y @modelcontextprotocol/server-github"),
+			ui.Accent("blaze mcp add docs --url https://example.com/mcp --header Authorization=\"Bearer …\""),
+			ui.Weak("They live in " + shortPath(mcp.GlobalFile(config.Dir())) + " (shared with Blaze Desktop) or the folder's .mcp.json."),
+		})
+		return
+	}
+	var rows []string
+	for _, st := range sts {
+		mark, word := ui.Weak("□ "), st.Status
+		switch st.Status {
+		case mcp.Connected:
+			mark = ui.Accent("■ ")
+			word = fmt.Sprintf("connected · %d tool%s", len(st.Tools), plural(len(st.Tools)))
+		case mcp.Failed:
+			mark = ui.Ink("✕ ")
+			word = "failed"
+		case mcp.Starting:
+			word = "starting…"
+		}
+		rows = append(rows, mark+ui.Ink(fmt.Sprintf("%-14s", st.Server.Name))+ui.Sub(fmt.Sprintf(" %-6s %s", st.Server.Kind(), word)))
+		rows = append(rows, "    "+ui.Weak(clipStr(st.Server.Target(), 70)+" · "+shortPath(st.Server.Source)))
+		if st.Err != "" {
+			rows = append(rows, "    "+ui.Sub(clipStr(st.Err, 110)))
+		}
+		if st.Status == mcp.Connected && len(st.Tools) > 0 {
+			var names []string
+			for _, t := range st.Tools {
+				names = append(names, t.Name)
+			}
+			rows = append(rows, "    "+ui.Weak(clipStr(strings.Join(names, ", "), 110)))
+		}
+	}
+	ui.Box(ui.AccentLabel("mcp servers"), rows)
+	ui.Println("  " + ui.Weak("blaze mcp add · remove · enable · disable   (in chat: /mcp reload after editing mcp.json)"))
+}
+
+func clipStr(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
+}
+
+// mcpDoctor adds one doctor line per server: does it start and list its tools.
+func mcpDoctor(add func(name string, ok bool, detail string)) {
+	cwd, _ := os.Getwd()
+	m := mcp.New(config.Dir(), cwd, version)
+	m.Start()
+	defer m.Close()
+	m.Wait(mcp.InitTimeout + 5*time.Second)
+	for _, w := range m.Warnings() {
+		add("MCP config", false, w)
+	}
+	for _, st := range m.States() {
+		name := "MCP " + st.Server.Name
+		switch st.Status {
+		case mcp.Connected:
+			add(name, true, fmt.Sprintf("%d tools · %.1fs", len(st.Tools), st.Took.Seconds()))
+		case mcp.Disabled:
+			add(name, true, "turned off")
+		case mcp.Starting:
+			add(name, false, "didn't finish starting in time")
+		default:
+			add(name, false, st.Err)
+		}
+	}
+}

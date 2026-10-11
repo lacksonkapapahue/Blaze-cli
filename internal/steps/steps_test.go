@@ -30,6 +30,8 @@ func TestDescribe(t *testing.T) {
 		{"dispatch_specialist", `{"name":"api-tests","brief":"..."}`, "Briefing a specialist"},
 		{"dispatch_agent", `{}`, "Handing this to a background agent"},
 		{"mcp_linear_list_issues", `{}`, "Using Linear: list issues"},
+		{"mcp__github__list_issues", `{"repo":"x"}`, "Asking Github to list issues"},
+		{"mcp__my-docs__search", `{}`, "Asking My docs to search"},
 		{"mystery_tool", `{}`, "Using mystery tool"},
 		{"", ``, "Working on it"},
 	}
