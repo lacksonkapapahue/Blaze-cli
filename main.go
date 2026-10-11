@@ -318,17 +318,38 @@ func repl(a *agent.Agent, bg *bgAgents, in sysinfo.Info, cont bool) {
 		}
 	}()
 	typedNext := "" // what the user typed for the next run (attachments aside), for /rewind
+	// Blaze is always available: messages sent mid-turn are answered now (lane.go).
+	ln := &lane{a: a, bg: bg, stop: func() {
+		mu.Lock()
+		c := cancel
+		mu.Unlock()
+		if c != nil {
+			c()
+		}
+	}, running: func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return cancel != nil
+	}}
+	ui.OnSend = ln.send
 	var run func(prompt string)
 	run = func(prompt string) {
 		typed := typedNext
 		typedNext = ""
+		defer func() {
+			// what was said mid-turn and not read yet: kept, or acted on next
+			if next := ln.settle(3 * time.Second); next != "" && !restartAfterTurn {
+				ui.Println("\n  " + ui.Accent("▸ ") + ui.Weak("Blaze picks up what you said while it worked"))
+				run(next)
+			}
+		}()
 		turn := beginTurn(a, typed, prompt)
 		ctx, c := context.WithCancel(context.Background())
 		mu.Lock()
 		cancel = c
 		mu.Unlock()
 		restore := ui.Quiet()
-		ui.StartTypeahead() // the composer stays open: type and queue while Blaze works
+		ui.StartTypeahead() // the composer stays open: Blaze answers while it works (lane.go)
 		_, err := a.Ask(ctx, prompt)
 		ed.Keep(ui.StopTypeahead())
 		restore()
@@ -386,6 +407,11 @@ func repl(a *agent.Agent, bg *bgAgents, in sysinfo.Info, cont bool) {
 		// turn: queued messages run first, in order, then agents' results and asks.
 		var line string
 		var err error
+		if next := ln.settle(0); next != "" {
+			// a mid-turn message answered after the turn ended still asks for action
+			run(next)
+			continue
+		}
 		if q, ok := ui.NextQueued(); ok {
 			line = q
 			ui.Println("\n" + ui.Accent("›") + " " + ui.Ink(q) + ui.Weak("  · sent while Blaze worked"))
@@ -571,7 +597,7 @@ func help() {
 		ui.Ink("ctrl+c") + ui.Sub("        stop a task · twice on an empty line quits"),
 		ui.Ink("esc esc") + ui.Sub("       on an empty line: /rewind (pick a message to go back to)"),
 		ui.Ink("ctrl+o") + ui.Sub("        show / hide the last answer's steps (commands, output, diffs)"),
-		ui.Ink("typing") + ui.Sub("        works while Blaze is busy: enter queues the message for its next turn"),
+		ui.Ink("typing") + ui.Sub("        works while Blaze is busy: it answers right away, steers the work or stops it"),
 	})
 }
 

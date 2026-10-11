@@ -3,8 +3,8 @@ package ui
 // The docked composer (v0.8.2). While a turn runs, the same boxed chat bar as the
 // prompt stays on screen under the working line instead of a short "› type to queue"
 // tail beside it: what you type shows in the box, "/" and "@" open the same pop-up
-// menu above it (↑ ↓ move, Tab or Enter fills in, Esc closes), and Enter queues the
-// message for Blaze's next turn. The working line, the menu, the box and its footer
+// menu above it (↑ ↓ move, Tab or Enter fills in, Esc closes), and Enter sends the
+// message: Blaze answers it right away (v0.9.1, OnSend) while the work carries on. The working line, the menu, the box and its footer
 // are one live region at the bottom of the screen: every spinner tick erases and
 // redraws it, and anything printed during the turn (Above) clears it first.
 //
@@ -28,7 +28,7 @@ var (
 	dockDrawn int // rows the live region took when last drawn (0: nothing on screen)
 )
 
-const dockPlaceholder = "Type your next message · Enter queues it for when this step is done"
+const dockPlaceholder = "Message Blaze · it answers right away, even while it works"
 
 // dockUsable reports whether the composer box can be drawn under the working line.
 func dockUsable() bool { return color && termWidth() >= 30 }
@@ -83,23 +83,7 @@ func dockLines(W int) []string {
 	if len(ta.buf) == 0 {
 		text = Weak(clip(dockPlaceholder, n-1))
 	} else {
-		// the end of the line (where you type) always shows; older text scrolls off the left
-		var parts []string
-		w := 1 // the caret
-		i := len(ta.buf)
-		for i > 0 {
-			s, cw := dispRune(ta.buf[i-1])
-			if w+cw > n {
-				break
-			}
-			parts = append([]string{s}, parts...)
-			w += cw
-			i--
-		}
-		if i > 0 && len(parts) > 0 {
-			parts[0] = "…"
-		}
-		text = Ink(strings.Join(parts, "")) + Accent("▏")
+		text = caretWindow(ta.buf, ta.cur, n)
 	}
 	row := glyph + text
 	out = append(out,
@@ -107,15 +91,55 @@ func dockLines(W int) []string {
 		"  "+hair("│")+" "+row+strings.Repeat(" ", max(0, BW-4-width(row)))+" "+hair("│"),
 		"  "+hair("└"+strings.Repeat("─", BW-2)+"┘"),
 	)
-	foot := "  " + Weak("enter queues · / commands · @ files · ctrl-c stops Blaze")
+	foot := "  " + Weak("enter sends, Blaze answers now · / commands · @ files · ctrl-c stops Blaze")
 	if q := len(ta.queue); q > 0 {
-		foot = "  " + Accent(strconv.Itoa(q)+" queued") + Weak(" · Blaze reads "+dockPlural(q, "it", "them")+" next · enter queues another")
+		foot = "  " + Accent(strconv.Itoa(q)+" waiting") + Weak(" · "+dockPlural(q, "it runs", "they run")+" when this step is done · enter sends")
 	}
 	out = append(out, foot)
 	for i, l := range out {
 		out[i] = clipStyled(l, W-1)
 	}
 	return out
+}
+
+// caretWindow draws buf with the caret at cur in n columns: the caret always shows,
+// and text that doesn't fit scrolls off either side ("…").
+func caretWindow(buf []rune, cur, n int) string {
+	if cur < 0 || cur > len(buf) {
+		cur = len(buf)
+	}
+	cells := make([]string, len(buf))
+	ws := make([]int, len(buf))
+	for i, r := range buf {
+		cells[i], ws[i] = dispRune(r)
+	}
+	// widen [lo, hi) around the caret, after it first only once the start shows
+	lo, hi, w := cur, cur, 1
+	for {
+		grew := false
+		if lo > 0 && w+ws[lo-1] <= n {
+			lo--
+			w += ws[lo]
+			grew = true
+		}
+		if hi < len(buf) && w+ws[hi] <= n && (lo == 0 || !grew) {
+			w += ws[hi]
+			hi++
+			grew = true
+		}
+		if !grew {
+			break
+		}
+	}
+	before := append([]string(nil), cells[lo:cur]...)
+	after := append([]string(nil), cells[cur:hi]...)
+	if lo > 0 && len(before) > 0 {
+		before[0] = "…"
+	}
+	if hi < len(buf) && len(after) > 0 {
+		after[len(after)-1] = "…"
+	}
+	return Ink(strings.Join(before, "")) + Accent("▏") + Ink(strings.Join(after, ""))
 }
 
 func dockPlural(n int, one, many string) string {
@@ -166,7 +190,8 @@ func printOverLive(lines []string) {
 }
 
 // dockKey handles the menu keys in the composer: it reports whether k was used.
-// k is "up", "down", "tab", "enter" or "esc". Called with ta.mu held.
+// k is "up", "down", "tab", "enter", "esc" or a caret key (never used here).
+// Called with ta.mu held.
 func (t *typeahead) dockKey(k string) (used, submit bool) {
 	m := t.dockMenu()
 	if m == nil {
@@ -186,6 +211,7 @@ func (t *typeahead) dockKey(k string) (used, submit bool) {
 			return false, false // already exactly this: Enter queues it as typed
 		}
 		t.buf = []rune(it.Insert)
+		t.cur = len(t.buf)
 		t.menuLine, t.menuIdx = "", 0
 		return true, k == "enter" && it.Submit
 	default:

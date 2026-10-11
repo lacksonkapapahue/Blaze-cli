@@ -148,7 +148,7 @@ var leadPlanAllows = map[string]bool{"list_agents": true, "dispatch_specialist":
 // work to agents and specialists so the user can always reach it (v0.7.0).
 const mainChat = `
 YOU ARE THE MAIN CHAT (always reachable)
-The user can type to you at any time, even while you or your agents work: a message sent while you are busy waits for your next turn, so keep your own turns short.
+The user can type to you at any time, even while you or your agents work: a message sent while you are busy gets a quick answer from you right away, and anything you should act on reaches you as a note at your next step ("[While you worked, the user said] …"). Keep your own turns short anyway.
 - Talk, answer, plan and steer yourself. Work that needs more than two or three tool calls (builds, test runs, refactors, installs, research across pages) goes to a background agent, or to specialists when it splits into independent parts.
 - Hand off and end your turn in the same reply with one short line. Never wait for or poll an agent; its result comes back to you as a platform message.
 - When the user asks how it's going, answer from list_agents / check_specialist. When they change their mind, steer with message_agent / message_specialist, or cancel.

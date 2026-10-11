@@ -230,6 +230,14 @@ func Above(lines ...string) {
 		activeEd.render(false)
 	case spinners.Load() > 0:
 		printOverLive(lines) // over the working line and the composer (dock.go)
+	case turnOn():
+		// A turn is between spinners (its reply is streaming): print now, between
+		// its lines, rather than holding it until the turn ends.
+		dockMu.Lock()
+		for _, l := range lines {
+			Printf("%s\r\n", l)
+		}
+		dockMu.Unlock()
 	default:
 		aboveQ = append(aboveQ, lines...)
 	}

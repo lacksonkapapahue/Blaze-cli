@@ -122,7 +122,11 @@ func newBG(a *agent.Agent) *bgAgents {
 
 // lead runs one of the main chat's agent tools: background agents and specialists.
 // Specialists inherit the lead's folder, mode and step budget (never more).
-func (b *bgAgents) lead(name, args string) string {
+func (b *bgAgents) lead(name, args string) string { return b.leadFrom(name, args, true) }
+
+// leadFrom runs a lead tool; main is false for the side lane (lane.go), whose
+// dispatches must not end the main turn as a handoff.
+func (b *bgAgents) leadFrom(name, args string, main bool) string {
 	mode, max := "build", b.main.Cfg.MaxSteps
 	if b.main.Env.Plan {
 		mode = "plan"
@@ -137,7 +141,7 @@ func (b *bgAgents) lead(name, args string) string {
 		return "Plan mode is on: applying a specialist's changes waits for Build. Tell the user what it changed and that switching to Build (shift+tab) lets you apply it."
 	}
 	out := b.m.HandleLeadTool(name, args, agents.Lead{Conv: b.conv, Folder: b.main.Env.Shell.Cwd(), Mode: mode, MaxSteps: max})
-	if out.Dispatched != "" {
+	if out.Dispatched != "" && main {
 		b.mu.Lock()
 		b.dispatched++
 		b.mu.Unlock()

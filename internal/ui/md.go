@@ -14,6 +14,28 @@ type MD struct {
 	// Pre runs before a batch of finished lines is printed (stop the spinner),
 	// Post after it while more text is still streaming (start it again).
 	Pre, Post func()
+	// Out, when set, takes each rendered line instead of printing it.
+	Out func(string)
+}
+
+func (m *MD) emit(s string) {
+	if m.Out != nil {
+		m.Out(s)
+		return
+	}
+	Println(s)
+}
+
+// RenderMD renders a whole Markdown text into styled lines (for Above).
+func RenderMD(text string) []string {
+	var out []string
+	m := &MD{Out: func(s string) { out = append(out, s) }}
+	m.Write(text)
+	m.Flush()
+	for len(out) > 0 && out[len(out)-1] == "" {
+		out = out[:len(out)-1]
+	}
+	return out
 }
 
 var (
@@ -36,39 +58,39 @@ func (m *MD) line(l string) {
 	if strings.HasPrefix(t, "```") {
 		if !m.inCode {
 			lang := strings.TrimPrefix(t, "```")
-			Println("  " + hair("┌─ ") + Label(nonEmpty(lang, "code")))
+			m.emit("  " + hair("┌─ ") + Label(nonEmpty(lang, "code")))
 		} else {
-			Println("  " + hair("└─"))
+			m.emit("  " + hair("└─"))
 		}
 		m.inCode = !m.inCode
 		return
 	}
 	if m.inCode {
-		Println("  " + hair("│ ") + Ink(l))
+		m.emit("  " + hair("│ ") + Ink(l))
 		return
 	}
 	switch {
 	case t == "":
-		Println("")
+		m.emit("")
 	case strings.HasPrefix(t, "#"):
 		h := strings.TrimSpace(strings.TrimLeft(t, "#"))
-		Println("  " + Accent("■ ") + Bold(h))
+		m.emit("  " + Accent("■ ") + Bold(h))
 	case strings.HasPrefix(t, "- ") || strings.HasPrefix(t, "* ") || strings.HasPrefix(t, "• "):
 		indent := strings.Repeat("  ", (len(l)-len(strings.TrimLeft(l, " ")))/2)
-		Println("  " + indent + Weak("·") + " " + inline(t[2:]))
+		m.emit("  " + indent + Weak("·") + " " + inline(t[2:]))
 	case reNum.MatchString(l):
 		g := reNum.FindStringSubmatch(l)
 		n := g[2]
 		if len(n) == 1 {
 			n = "0" + n
 		}
-		Println("  " + g[1] + Weak(n) + "  " + inline(g[3]))
+		m.emit("  " + g[1] + Weak(n) + "  " + inline(g[3]))
 	case strings.HasPrefix(t, "> "):
-		Println("  " + Accent("│ ") + Sub(t[2:]))
+		m.emit("  " + Accent("│ ") + Sub(t[2:]))
 	case t == "---" || t == "***":
-		Println("  " + hair(strings.Repeat("─", 48)))
+		m.emit("  " + hair(strings.Repeat("─", 48)))
 	default:
-		Println("  " + inline(l))
+		m.emit("  " + inline(l))
 	}
 }
 
@@ -108,7 +130,7 @@ func (m *MD) Flush() {
 		m.buf.Reset()
 	}
 	if m.inCode {
-		Println("  " + hair("└─"))
+		m.emit("  " + hair("└─"))
 		m.inCode = false
 	}
 }
