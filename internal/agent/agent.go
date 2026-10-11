@@ -126,7 +126,7 @@ RULES
 	if _, err := os.Stat(a.Env.Root + string(os.PathSeparator) + ".git"); err == nil {
 		b.WriteString("This folder is a git repository.\n")
 	}
-	if m := tools.Memory(); m != "" {
+	if m := tools.Memory(recentQuery(a.History)); m != "" {
 		b.WriteString("\nWHAT YOU KNOW ABOUT THE USER (ids let remember replace and forget remove a memory)\n" + m + "\n")
 	}
 	b.WriteString(tools.SkillsFor(recentQuery(a.History)))

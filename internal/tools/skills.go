@@ -33,6 +33,7 @@ func SeedSkills(fsys fs.FS) (skillpack.Report, error) {
 	pack.Lock()
 	pack.skills, pack.report = p, r
 	pack.Unlock()
+	SyncSkillIndex() // the shared skills index in blaze.db follows the folder
 	return r, err
 }
 

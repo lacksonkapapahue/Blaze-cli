@@ -271,8 +271,8 @@ func (a *Agent) Reflect(ctx context.Context) {
 	a.printLearned()
 }
 
-func parseRef(s string) (int, bool) {
-	var n int
+func parseRef(s string) (int64, bool) {
+	var n int64
 	_, err := fmt.Sscanf(strings.TrimPrefix(strings.TrimSpace(s), "#"), "%d", &n)
 	return n, err == nil && n > 0
 }

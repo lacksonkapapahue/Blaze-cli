@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/lacksonkapapahue/blaze-cli/internal/skillpack"
 )
@@ -119,7 +120,7 @@ func TestRememberReplacesAndNudges(t *testing.T) {
 	if !strings.HasPrefix(r, "Replaced memory #1") {
 		t.Fatal(r)
 	}
-	if m := Memory(); strings.Contains(m, "npm run build") || !strings.Contains(m, "from CI now, not by hand [#1]") {
+	if m := Memory("homeglow deploy"); strings.Contains(m, "npm run build") || !strings.Contains(m, "from CI now, not by hand [#1]") {
 		t.Fatalf("memory after replace: %s", m)
 	}
 	if r := Run(&Env{}, "recall", `{"query":"rsync deploy"}`); !strings.Contains(r, "#2") {
@@ -146,5 +147,47 @@ func TestPromptListsMatchingSkills(t *testing.T) {
 	p := SkillsFor("please deploy the shopify theme")
 	if !strings.Contains(p, "deploy-homeglow") || !strings.Contains(p, "10 of 15") {
 		t.Fatalf("prompt: %s", p)
+	}
+}
+
+func TestMemoryLivesInBlazeDB(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BLAZE_HOME", home)
+	_ = os.WriteFile(filepath.Join(home, "memory.md"), []byte("- Uses pnpm, not npm (2026-10-01)\n"), 0o600)
+	if r := Run(&Env{}, "remember", `{"fact":"Runs Arch Linux with Hyprland"}`); !strings.HasPrefix(r, "Remembered (#2)") {
+		t.Fatal(r)
+	}
+	if _, err := os.Stat(filepath.Join(home, "memory.md")); !os.IsNotExist(err) {
+		t.Fatal("memory.md should have been imported and moved aside")
+	}
+	if _, err := os.Stat(filepath.Join(home, "blaze.db")); err != nil {
+		t.Fatal("blaze.db missing")
+	}
+	if r := Run(&Env{}, "recall", `{"query":"pnpm"}`); !strings.Contains(r, "#1 Uses pnpm, not npm") {
+		t.Fatal(r)
+	}
+	if m := Memory("which linux"); !strings.Contains(m, "Hyprland [#2]") {
+		t.Fatal(m)
+	}
+}
+
+func TestSkillsIndexedInBlazeDB(t *testing.T) {
+	t.Setenv("BLAZE_HOME", t.TempDir())
+	if _, err := WriteSkill("deploy-homeglow", "Deploy the HomeGlow Shopify theme", []string{"deploy"}, "1. pnpm build"); err != nil {
+		t.Fatal(err)
+	}
+	Skills()
+	if got := DB().SearchSkills("shopify theme", 3); len(got) != 1 || got[0].Name != "deploy-homeglow" {
+		t.Fatalf("index: %+v", got)
+	}
+	// A hand edit to the file (newer mtime) reaches the index on the next listing.
+	f := filepath.Join(skillsDir(), "deploy-homeglow", "SKILL.md")
+	b, _ := os.ReadFile(f)
+	_ = os.WriteFile(f, append(b, []byte("\n2. rsync to the droplet\n")...), 0o600)
+	future := time.Now().Add(time.Minute)
+	_ = os.Chtimes(f, future, future)
+	Skills()
+	if got := DB().SearchSkills("droplet", 3); len(got) != 1 {
+		t.Fatalf("edit not indexed: %+v", got)
 	}
 }
