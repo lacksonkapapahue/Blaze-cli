@@ -15,6 +15,7 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -175,31 +176,25 @@ func Wake() {
 
 // Above prints lines over the open prompt (or over the spinner while a task runs).
 // With neither on screen, the lines wait and show when the prompt next opens.
+// In live mode they go above the always-open box.
 func Above(lines ...string) {
 	edMu.Lock()
 	defer edMu.Unlock()
 	switch {
+	case live && modalN == 0:
+		liveWrite(strings.Join(lines, "\n") + "\n")
 	case activeEd != nil:
 		activeEd.clear()
 		for _, l := range lines {
-			Printf("%s\r\n", l)
+			emit(l + "\r\n")
 		}
 		activeEd.render(false)
 	case spinners.Load() > 0:
 		for _, l := range lines {
-			Printf("\r\x1b[2K%s\n", l)
+			emit("\r\x1b[2K" + l + "\n")
 		}
 	default:
 		aboveQ = append(aboveQ, lines...)
-	}
-}
-
-// Refresh redraws the open prompt (its footer shows live status).
-func Refresh() {
-	edMu.Lock()
-	defer edMu.Unlock()
-	if activeEd != nil {
-		activeEd.render(false)
 	}
 }
 

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"os"
+	"strings"
 
 	"golang.org/x/term"
 )
@@ -52,3 +53,45 @@ func readHidden() (string, bool) {
 
 // IsTTY is true when stdout is a terminal (not piped).
 func IsTTY() bool { return term.IsTerminal(int(os.Stdout.Fd())) }
+
+// readRawLine reads a line while the terminal is in raw mode (a question asked while
+// the chat's prompt is open): it echoes what is typed itself.
+func readRawLine(prompt string) (string, error) {
+	emit(prompt)
+	var b []rune
+	for {
+		r, _, err := In.ReadRune()
+		if err != nil {
+			emit("\r\n")
+			return string(b), err
+		}
+		switch r {
+		case '\r', '\n':
+			emit("\r\n")
+			return string(b), nil
+		case 3: // Ctrl-C
+			emit("\r\n")
+			return "", nil
+		case 127, 8:
+			if len(b) > 0 {
+				b = b[:len(b)-1]
+				emit("\b \b")
+			}
+		case 21: // Ctrl-U
+			emit(strings.Repeat("\b \b", len(b)))
+			b = nil
+		case 27:
+			for In.Buffered() > 0 {
+				c, _, _ := In.ReadRune()
+				if c >= 0x40 && c <= 0x7e && c != '[' {
+					break
+				}
+			}
+		default:
+			if r >= 32 {
+				b = append(b, r)
+				emit(string(r))
+			}
+		}
+	}
+}

@@ -130,6 +130,8 @@ type Spinner struct {
 	done  chan struct{}
 	on    bool
 	since time.Time
+	frame int  // live mode: animation frame
+	lived bool // live mode: shown above the input box instead of drawn here
 }
 
 // sparks: braille dots that rise through two cells, like embers off a blaze.
@@ -154,6 +156,20 @@ func (s *Spinner) Start(text string) {
 	if !color || !IsTTY() {
 		return
 	}
+	edMu.Lock()
+	if live { // the status line above the open input box
+		liveSpin = s
+		s.mu.Lock()
+		s.text = text
+		if !s.lived {
+			s.lived, s.since = true, time.Now()
+		}
+		s.mu.Unlock()
+		edMu.Unlock()
+		Refresh()
+		return
+	}
+	edMu.Unlock()
 	s.mu.Lock()
 	s.text = text
 	if s.on {
@@ -227,6 +243,18 @@ func spinLine(i int, txt string, el time.Duration) string {
 func (s *Spinner) Set(text string) { s.mu.Lock(); s.text = text; s.mu.Unlock() }
 
 func (s *Spinner) Stop() {
+	edMu.Lock()
+	if liveSpin == s {
+		liveSpin = nil
+	}
+	s.mu.Lock()
+	wasLive := s.lived
+	s.lived = false
+	s.mu.Unlock()
+	edMu.Unlock()
+	if wasLive {
+		Refresh()
+	}
 	s.mu.Lock()
 	if !s.on {
 		s.mu.Unlock()

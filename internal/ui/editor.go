@@ -1,16 +1,18 @@
 package ui
 
 // A small line editor so the prompt behaves like a real shell prompt:
-// ← → Home End, word jumps, ↑ ↓ history, Tab completion, ghost suggestions,
-// bracketed paste and Ctrl shortcuts. Falls back to plain reads when piped.
+// ← → Home End, word jumps, ↑ ↓ history, ghost suggestions, Ctrl shortcuts, and
+// the command menu ("/", "@" and argument menus like "/skills ", menu.go). Pasting
+// keeps a multi-line block as one message (bracketed paste, Ctrl+Shift+V, or
+// Ctrl+V reading the clipboard). In live mode (live.go) it stays open while Blaze
+// works. Falls back to plain reads when piped.
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
+	"time"
 	"unicode"
 
 	"golang.org/x/term"
@@ -21,31 +23,51 @@ var ErrInterrupt = errors.New("interrupt")
 
 type Editor struct {
 	HistoryFile string                   // persisted history, one entry per line ("" = memory only)
-	Commands    []string                 // slash commands for Tab / ghost completion
+	Menu        []MenuItem               // slash commands for the "/" menu
+	ArgMenus    map[string]ArgMenu       // argument menus by command ("/skills")
+	Dir         func() string            // folder the "@" menu lists (nil = the process's)
 	Placeholder string                   // dim hint shown while the line is empty
 	Boxed       bool                     // draw the input inside a hairline box
 	Glyph       func(line string) string // prompt glyph for the current line (mode / shell)
 	Footer      func(line string) string // dim line under the box
 	OnShiftTab  func()                   // cycle modes
+	Busy        func() bool              // Blaze is working (Esc / Ctrl+C interrupt it)
+	OnInterrupt func()                   // stop the current turn
+	OnImage     func(png []byte) string  // a pasted picture: save it, return the text to insert ("" = can't)
 
 	history []string
 	loaded  bool
 	killed  []rune // last Ctrl-K/U/W text, for Ctrl-Y
 
 	// render state
-	buf     []rune
-	pos     int
-	prompt  string
-	curRow  int // row of the cursor relative to the prompt's first row
-	histIdx int
-	draft   []rune
-	keep    []rune // typed text kept across a wake
+	buf       []rune
+	pos       int
+	prompt    string
+	curRow    int // row of the cursor relative to the top of what's drawn
+	histIdx   int
+	draft     []rune
+	keep      []rune // typed text kept across a wake (or set by Prefill)
+	sel       int    // menu selection
+	menuOff   bool   // Esc closed the menu…
+	menuOffAt string // …for this text
+	hint      string // one-line note under the box until the next key
+}
+
+// Prefill puts text in the prompt the next time it opens ("/skills " opens the
+// skills picker).
+func (e *Editor) Prefill(s string) {
+	edMu.Lock()
+	e.keep = []rune(s)
+	edMu.Unlock()
 }
 
 // StdinTTY is true when we can put the keyboard in raw mode.
 func StdinTTY() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
 
 func termWidth() int {
+	if termW > 0 {
+		return termW
+	}
 	if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && w > 10 {
 		return w
 	}
@@ -99,32 +121,49 @@ func (e *Editor) Read(prompt string) (string, error) {
 		return ReadLine(prompt)
 	}
 	if i := strings.LastIndex(prompt, "\n"); i >= 0 {
-		Printf("%s", strings.ReplaceAll(prompt[:i+1], "\n", "\r\n"))
+		Printf("%s", prompt[:i+1])
 		prompt = prompt[i+1:]
 	}
 	fd := int(os.Stdin.Fd())
-	old, err := term.MakeRaw(fd)
+	restore, err := makeRaw(fd)
 	if err != nil {
 		return ReadLine(prompt)
 	}
-	Printf("\x1b[?2004h") // bracketed paste on
+	// Bracketed paste and focus reports only while the keyboard is raw: in the
+	// terminal's normal mode a focus report would be echoed as ^[[I / ^[[O.
+	focusOn := color
+	seq := "\x1b[?2004h"
+	if focusOn {
+		seq += "\x1b[?1004h"
+	}
+	emit(seq)
 	defer func() {
-		Printf("\x1b[?2004l")
-		_ = term.Restore(fd, old)
+		off := "\x1b[?2004l"
+		if focusOn {
+			off += "\x1b[?1004l"
+		}
+		emit(off)
+		restore()
 	}()
 
 	FlushAbove()
 	edMu.Lock()
+	for modalN > 0 { // an approval or picker is on screen: open after it
+		edMu.Unlock()
+		time.Sleep(15 * time.Millisecond)
+		edMu.Lock()
+	}
 	if wakeWanted {
 		wakeWanted = false
 		edMu.Unlock()
 		return "", ErrWake
 	}
+	rawActive = true
 	select {
 	case <-stdinR.wake: // a stale wake from an earlier prompt
 	default:
 	}
-	e.buf, e.pos, e.prompt, e.curRow = nil, 0, prompt, 0
+	e.buf, e.pos, e.prompt, e.curRow, e.sel, e.menuOff, e.hint = nil, 0, prompt, 0, 0, false, ""
 	if e.keep != nil {
 		e.buf, e.pos, e.keep = e.keep, len(e.keep), nil
 	}
@@ -137,12 +176,23 @@ func (e *Editor) Read(prompt string) (string, error) {
 		if activeEd == e {
 			activeEd = nil
 		}
+		rawActive = false
+		if m := modalReq; m != nil { // a modal asked while we were closing
+			modalReq = nil
+			close(m.ready)
+		}
 		edMu.Unlock()
 	}()
 
 	for {
 		r, _, err := In.ReadRune()
 		edMu.Lock()
+		if errors.Is(err, ErrWake) {
+			if e.takeModal() || !wakeWanted {
+				edMu.Unlock()
+				continue
+			}
+		}
 		out, done, rerr := e.key(r, err)
 		edMu.Unlock()
 		if done {
@@ -151,10 +201,27 @@ func (e *Editor) Read(prompt string) (string, error) {
 	}
 }
 
+func (e *Editor) busy() bool { return e.Busy != nil && e.Busy() }
+
+func (e *Editor) interrupt() {
+	if e.OnInterrupt != nil {
+		go e.OnInterrupt() // never under the screen lock
+	}
+}
+
+// submit ends the Read with the buffer.
+func (e *Editor) submit() (string, bool, error) {
+	out := string(e.buf)
+	e.render(true)
+	emit("\r\n")
+	e.remember(out)
+	return out, true, nil
+}
+
 // key handles one key (called with edMu held). done ends the Read.
 func (e *Editor) key(r rune, err error) (string, bool, error) {
 	if errors.Is(err, ErrWake) {
-		e.clear()
+		emit(e.clearSeq())
 		e.keep = append([]rune(nil), e.buf...)
 		wakeWanted = false
 		activeEd = nil
@@ -162,28 +229,52 @@ func (e *Editor) key(r rune, err error) (string, bool, error) {
 	}
 	if err != nil {
 		e.render(true)
-		Printf("\r\n")
+		emit("\r\n")
 		return "", true, io.EOF
 	}
+	before := string(e.buf)
+	e.hint = ""
+	m := e.menu()
 	switch r {
 	case '\r', '\n':
-		out := string(e.buf)
-		e.render(true)
-		Printf("\r\n")
-		e.remember(out)
-		return out, true, nil
-	case 3: // Ctrl-C
-		if len(e.buf) > 0 {
-			e.buf, e.pos = nil, 0
+		if (m.kind == "/" || m.kind == "arg") && len(m.items) > 0 && !e.pasting() {
+			typed := strings.TrimSpace(string(e.buf))
+			exact := false
+			for _, it := range m.items {
+				exact = exact || it.Name == typed || m.cmd+" "+it.Name == typed
+			}
+			if !exact {
+				e.menuAccept(m)
+				e.buf = []rune(strings.TrimRight(string(e.buf), " "))
+				e.pos = len(e.buf)
+			}
+			return e.submit()
+		}
+		if m.kind == "@" && len(m.items) > 0 {
+			e.menuAccept(m)
 			break
 		}
-		e.render(true)
-		Printf("\r\n")
-		return "", true, ErrInterrupt
-	case 4: // Ctrl-D
-		if len(e.buf) == 0 {
+		if e.pasting() { // a paste without bracketed paste: keep the lines together
+			e.insert([]rune{'\n'})
+			break
+		}
+		return e.submit()
+	case 3: // Ctrl-C
+		switch {
+		case len(e.buf) > 0:
+			e.buf, e.pos = nil, 0
+		case e.busy():
+			e.interrupt()
+			e.hint = "Stopping…"
+		default:
 			e.render(true)
-			Printf("\r\n")
+			emit("\r\n")
+			return "", true, ErrInterrupt
+		}
+	case 4: // Ctrl-D
+		if len(e.buf) == 0 && !e.busy() {
+			e.render(true)
+			emit("\r\n")
 			return "", true, io.EOF
 		}
 		e.del()
@@ -206,32 +297,126 @@ func (e *Editor) key(r rune, err error) (string, bool, error) {
 	case 25:
 		e.insert(e.killed)
 	case 12:
-		Printf("\x1b[H\x1b[2J")
+		emit("\x1b[H\x1b[2J")
 		e.curRow = 0
+	case 15: // Ctrl-O: the last turn's steps, exactly
+		e.expand()
+		return "", false, nil
 	case 16:
-		e.histPrev()
+		e.up(m)
 	case 14:
-		e.histNext()
+		e.down(m)
+	case 22: // Ctrl-V: read the system clipboard
+		e.clipboardPaste()
 	case 9:
-		e.tab()
+		e.tab(m)
 	case 27:
-		e.escape()
+		e.escape(m)
 	default:
-		if r >= 32 || r == '\t' {
+		if r >= 32 {
 			e.insert([]rune{r})
 		}
+	}
+	if string(e.buf) != before {
+		e.sel = 0
 	}
 	e.render(false)
 	return "", false, nil
 }
 
-// clear wipes the drawn prompt so something can print where it was.
-func (e *Editor) clear() {
-	if e.curRow > 0 {
-		Printf("\x1b[%dA", e.curRow)
+// pasting reports whether a newline arrived with more text right behind it (a
+// paste in a terminal without bracketed paste).
+func (e *Editor) pasting() bool {
+	if In.Buffered() == 0 {
+		return false
 	}
-	Printf("\r\x1b[J")
+	b, err := In.Peek(1)
+	return err == nil && b[0] != 0x1b && b[0] != 3
+}
+
+func (e *Editor) up(m menuState) {
+	if m.kind != "" && len(m.items) > 0 {
+		e.sel--
+		e.clampSel(len(m.items))
+		return
+	}
+	e.histPrev()
+}
+
+func (e *Editor) down(m menuState) {
+	if m.kind != "" && len(m.items) > 0 {
+		e.sel++
+		e.clampSel(len(m.items))
+		return
+	}
+	e.histNext()
+}
+
+func (e *Editor) tab(m menuState) {
+	if m.kind != "" {
+		e.menuAccept(m)
+		return
+	}
+	if g := e.ghost(); g != "" {
+		e.insert([]rune(g))
+	}
+}
+
+// expand prints the last turn's steps with their exact commands above the box.
+func (e *Editor) expand() { writeAbove(expandLines()) }
+
+// clipboardPaste is Ctrl+V: text goes in as one block, a picture is attached.
+func (e *Editor) clipboardPaste() {
+	c, err := ReadClipboard()
+	var nc ErrNoClipboard
+	switch {
+	case errors.As(err, &nc):
+		e.hint = nc.Hint
+	case err != nil:
+		e.hint = "Couldn't read the clipboard: " + err.Error()
+	case len(c.Image) > 0:
+		if e.OnImage == nil {
+			e.hint = "The clipboard holds a picture; this prompt can't attach pictures"
+			return
+		}
+		if ins := e.OnImage(c.Image); ins != "" {
+			e.insertPaste(ins)
+		} else {
+			e.hint = "Couldn't save the pasted picture"
+		}
+	case c.Text == "":
+		e.hint = "The clipboard is empty"
+	default:
+		e.insertPaste(c.Text)
+	}
+}
+
+// insertPaste puts pasted text in as one block (newlines kept, nothing submitted).
+func (e *Editor) insertPaste(s string) { e.insert([]rune(normalizePaste(s))) }
+
+// clear wipes the drawn prompt so something can print where it was.
+func (e *Editor) clear() { emit(e.clearSeq()) }
+
+// clearSeq moves to the top of what the editor drew and erases it.
+func (e *Editor) clearSeq() string {
+	s := ""
+	if e.curRow > 0 {
+		s = "\x1b[" + itoa(e.curRow) + "A"
+	}
 	e.curRow = 0
+	return s + "\r\x1b[J"
+}
+
+func itoa(n int) string {
+	if n <= 0 {
+		return "0"
+	}
+	var b []byte
+	for n > 0 {
+		b = append([]byte{byte('0' + n%10)}, b...)
+		n /= 10
+	}
+	return string(b)
 }
 
 func (e *Editor) insert(rs []rune) {
@@ -344,160 +529,6 @@ func (e *Editor) histNext() {
 	e.pos = len(e.buf)
 }
 
-func (e *Editor) matches() []string {
-	s := string(e.buf)
-	var out []string
-	for _, c := range e.Commands {
-		if strings.HasPrefix(c, s) {
-			out = append(out, c)
-		}
-	}
-	return out
-}
-
-// ghost is the dim completion shown after the cursor when it's at the end.
-func (e *Editor) ghost() string {
-	if e.pos != len(e.buf) || len(e.buf) == 0 {
-		return ""
-	}
-	s := string(e.buf)
-	if strings.HasPrefix(s, "/") && !strings.Contains(s, " ") {
-		if m := e.matches(); len(m) > 0 && m[0] != s {
-			return m[0][len(s):]
-		}
-		return ""
-	}
-	for i := len(e.history) - 1; i >= 0; i-- {
-		h := e.history[i]
-		if len(h) > len(s) && strings.HasPrefix(h, s) && !strings.Contains(h, "\n") {
-			return h[len(s):]
-		}
-	}
-	return ""
-}
-
-func (e *Editor) tab() {
-	if e.atComplete() {
-		return
-	}
-	s := string(e.buf)
-	if !strings.HasPrefix(s, "/") || strings.Contains(s, " ") {
-		if g := e.ghost(); g != "" {
-			e.insert([]rune(g))
-		}
-		return
-	}
-	m := e.matches()
-	switch len(m) {
-	case 0:
-		return
-	case 1:
-		e.buf = []rune(m[0] + " ")
-		e.pos = len(e.buf)
-		return
-	}
-	// Several: complete the shared prefix and list them.
-	p := m[0]
-	for _, c := range m[1:] {
-		for !strings.HasPrefix(c, p) {
-			p = p[:len(p)-1]
-		}
-	}
-	if len(p) > len(s) {
-		e.buf = []rune(p)
-		e.pos = len(e.buf)
-		return
-	}
-	e.render(true)
-	var parts []string
-	for _, c := range m {
-		parts = append(parts, Accent(c))
-	}
-	Printf("\r\n  %s\r\n", strings.Join(parts, Weak("  ")))
-	e.curRow = 0
-}
-
-func (e *Editor) escape() {
-	if In.Buffered() == 0 {
-		return // a lone Esc key
-	}
-	r, _, _ := In.ReadRune()
-	switch r {
-	case '[', 'O':
-		seq := ""
-		for {
-			c, _, err := In.ReadRune()
-			if err != nil {
-				return
-			}
-			seq += string(c)
-			if c >= 0x40 && c <= 0x7e {
-				break
-			}
-		}
-		e.csi(r, seq)
-	case 'b', 'B':
-		e.pos = e.wordLeft()
-	case 'f', 'F':
-		e.pos = e.wordRight()
-	case 127, 8:
-		e.kill(e.wordLeft(), e.pos)
-	case 'd':
-		e.kill(e.pos, e.wordRight())
-	}
-}
-
-func (e *Editor) csi(intro rune, seq string) {
-	switch seq {
-	case "A":
-		e.histPrev()
-	case "B":
-		e.histNext()
-	case "C":
-		e.right()
-	case "D":
-		e.left()
-	case "H", "1~", "7~":
-		e.pos = 0
-	case "F", "4~", "8~":
-		e.end()
-	case "3~":
-		e.del()
-	case "1;5C", "1;3C", "5C":
-		e.pos = e.wordRight()
-	case "1;5D", "1;3D", "5D":
-		e.pos = e.wordLeft()
-	case "3;5~":
-		e.kill(e.pos, e.wordRight())
-	case "200~":
-		e.paste()
-	case "Z":
-		if e.OnShiftTab != nil {
-			e.OnShiftTab()
-		}
-	}
-	_ = intro
-}
-
-// paste reads a bracketed paste verbatim (newlines kept, nothing submitted).
-func (e *Editor) paste() {
-	var b []rune
-	const endSeq = "\x1b[201~"
-	for {
-		r, _, err := In.ReadRune()
-		if err != nil {
-			break
-		}
-		b = append(b, r)
-		if len(b) >= len(endSeq) && string(b[len(b)-len(endSeq):]) == endSeq {
-			b = b[:len(b)-len(endSeq)]
-			break
-		}
-	}
-	s := strings.ReplaceAll(strings.ReplaceAll(string(b), "\r\n", "\n"), "\r", "\n")
-	s = strings.TrimRight(s, "\n")
-	e.insert([]rune(s))
-}
 
 // ---------- drawing ----------
 
@@ -565,9 +596,134 @@ func layout(cells []cell, n, pos int) (rows [][]cell, cr, cc int) {
 	return
 }
 
+// ghost is the dim completion shown after the cursor when it's at the end: the
+// newest history entry that starts with what's typed (commands use the menu).
+func (e *Editor) ghost() string {
+	if e.pos != len(e.buf) || len(e.buf) == 0 {
+		return ""
+	}
+	s := string(e.buf)
+	if strings.HasPrefix(s, "/") {
+		return ""
+	}
+	for i := len(e.history) - 1; i >= 0; i-- {
+		h := e.history[i]
+		if len(h) > len(s) && strings.HasPrefix(h, s) && !strings.Contains(h, "\n") {
+			return h[len(s):]
+		}
+	}
+	return ""
+}
+
+func (e *Editor) escape(m menuState) {
+	if In.Buffered() == 0 { // a lone Esc key
+		switch {
+		case m.kind != "":
+			e.menuOff, e.menuOffAt = true, string(e.buf)
+		case e.busy():
+			e.interrupt()
+			e.hint = "Stopping…"
+		}
+		return
+	}
+	r, _, _ := In.ReadRune()
+	switch r {
+	case '[', 'O':
+		seq := ""
+		for {
+			c, _, err := In.ReadRune()
+			if err != nil {
+				return
+			}
+			seq += string(c)
+			if c >= 0x40 && c <= 0x7e {
+				break
+			}
+		}
+		e.csi(seq, m)
+	case 'b', 'B':
+		e.pos = e.wordLeft()
+	case 'f', 'F':
+		e.pos = e.wordRight()
+	case 127, 8:
+		e.kill(e.wordLeft(), e.pos)
+	case 'd':
+		e.kill(e.pos, e.wordRight())
+	case '\r', '\n': // Alt+Enter: a new line
+		e.insert([]rune{'\n'})
+	}
+}
+
+// csi handles one CSI sequence. Anything unknown (focus reports ESC[I / ESC[O,
+// mouse, kitty keys…) is swallowed, never typed.
+func (e *Editor) csi(seq string, m menuState) {
+	switch seq {
+	case "A":
+		e.up(m)
+	case "B":
+		e.down(m)
+	case "C":
+		e.right()
+	case "D":
+		e.left()
+	case "H", "1~", "7~":
+		e.pos = 0
+	case "F", "4~", "8~":
+		e.end()
+	case "3~":
+		e.del()
+	case "1;5C", "1;3C", "5C":
+		e.pos = e.wordRight()
+	case "1;5D", "1;3D", "5D":
+		e.pos = e.wordLeft()
+	case "3;5~":
+		e.kill(e.pos, e.wordRight())
+	case "200~":
+		e.paste()
+	case "118;5u", "118;6u", "86;6u", "27;6;118~", "27;6;86~", "27;5;118~":
+		// Ctrl+V / Ctrl+Shift+V sent as a key (kitty / modifyOtherKeys) instead of a paste
+		e.clipboardPaste()
+	case "13;2u", "27;2;13~", "13;5u", "27;5;13~": // Shift/Ctrl+Enter: a new line
+		e.insert([]rune{'\n'})
+	case "111;5u": // Ctrl+O sent as a key
+		e.expand()
+	case "Z":
+		if e.OnShiftTab != nil {
+			e.OnShiftTab()
+		}
+	case "I", "O": // focus in / out (input.go records them when they arrive whole)
+		focused.Store(seq == "I")
+		focusSeen.Store(true)
+	}
+}
+
+// paste reads a bracketed paste verbatim (newlines kept, nothing submitted).
+func (e *Editor) paste() {
+	var b []rune
+	const endSeq = "\x1b[201~"
+	for {
+		r, _, err := In.ReadRune()
+		if err != nil {
+			break
+		}
+		b = append(b, r)
+		if len(b) >= len(endSeq) && string(b[len(b)-len(endSeq):]) == endSeq {
+			b = b[:len(b)-len(endSeq)]
+			break
+		}
+	}
+	e.insertPaste(string(b))
+}
+
 // render redraws the input in place. final=true leaves a plain "› text" record
-// (no box, ghost or hint) so the scrollback stays clean.
+// (no box, ghost, menu or live lines) so the scrollback stays clean.
 func (e *Editor) render(final bool) {
+	emit(syncOn() + e.clearSeq() + e.frame(final) + syncOff())
+}
+
+// frame draws the editor from the top of its area (cursor at column 0 there) and
+// leaves the cursor in the text; it sets curRow.
+func (e *Editor) frame(final bool) string {
 	W := termWidth()
 	boxed := e.Boxed && W >= 30 && color
 	glyph := e.prompt
@@ -599,15 +755,13 @@ func (e *Editor) render(final bool) {
 		s, w := dispRune(r)
 		cells = append(cells, cell{s, w})
 	}
-	// cursor index in cells (newlines take two cells while editing)
-	pos := 0
+	pos := 0 // cursor index in cells (newlines take two cells while editing)
 	for i := 0; i < e.pos && i < len(e.buf); i++ {
 		pos++
 		if e.buf[i] == '\n' && !final {
 			pos++
 		}
 	}
-	nText := len(cells)
 	if !final {
 		extra := e.ghost()
 		if extra == "" && len(e.buf) == 0 {
@@ -619,16 +773,8 @@ func (e *Editor) render(final bool) {
 		}
 	}
 	rows, cr, cc := layout(cells, n, pos)
-	_ = nText
-	if final {
-		pos = len(cells)
-	}
 
 	var sb strings.Builder
-	if e.curRow > 0 {
-		fmt.Fprintf(&sb, "\x1b[%dA", e.curRow)
-	}
-	sb.WriteString("\r\x1b[J")
 	line := func(i int, r []cell) string {
 		var b strings.Builder
 		if i == 0 {
@@ -651,332 +797,100 @@ func (e *Editor) render(final bool) {
 		}
 		return b.String()
 	}
-	if boxed && !final {
-		sb.WriteString("  " + hair("┌"+strings.Repeat("─", BW-2)+"┐") + "\r\n")
-		for i, r := range rows {
-			sb.WriteString("  " + hair("│") + " " + line(i, r) + " " + hair("│") + "\r\n")
-		}
-		sb.WriteString("  " + hair("└"+strings.Repeat("─", BW-2)+"┘"))
-		if e.Footer != nil {
-			if f := e.Footer(string(e.buf)); f != "" {
-				sb.WriteString("\r\n" + clipStyled(f, W-2))
-			}
-		}
-		total := 1 + len(rows) + 1 // rows from top border to bottom border
-		if e.Footer != nil && e.Footer(string(e.buf)) != "" {
-			total++
-		}
-		target := 1 + cr
-		fmt.Fprintf(&sb, "\x1b[%dA\r", total-1-target)
-		fmt.Fprintf(&sb, "\x1b[%dC", 4+pw+cc)
-		e.curRow = target
-	} else {
+	if final {
 		for i, r := range rows {
 			if i > 0 {
 				sb.WriteString("\r\n")
 			}
 			sb.WriteString(line(i, r))
 		}
-		if final {
-			e.curRow = len(rows) - 1
-		} else {
-			if up := len(rows) - 1 - cr; up > 0 {
-				fmt.Fprintf(&sb, "\x1b[%dA", up)
-			}
-			sb.WriteString("\r")
-			if c := pw + cc; c > 0 {
-				fmt.Fprintf(&sb, "\x1b[%dC", c)
-			}
-			e.curRow = cr
-		}
+		e.curRow = len(rows) - 1
+		return sb.String()
 	}
-	Printf("%s", sb.String())
-}
 
-// atComplete completes an @path under the cursor. It reports whether it acted.
-func (e *Editor) atComplete() bool {
-	start := e.pos
-	for start > 0 && e.buf[start-1] != ' ' && e.buf[start-1] != '\n' {
-		start--
+	var top []string
+	if live {
+		top = preLines(W)
 	}
-	word := string(e.buf[start:e.pos])
-	if !strings.HasPrefix(word, "@") {
-		return false
-	}
-	frag := word[1:]
-	dir, base := filepath.Split(frag)
-	look := dir
-	if look == "" {
-		look = "."
-	}
-	if strings.HasPrefix(look, "~") {
-		h, _ := os.UserHomeDir()
-		look = h + look[1:]
-	}
-	ents, err := os.ReadDir(look)
-	if err != nil {
-		return true
-	}
-	var ms []string
-	for _, en := range ents {
-		nm := en.Name()
-		if strings.HasPrefix(nm, ".") && !strings.HasPrefix(base, ".") {
-			continue
+	m := e.menu()
+	var menuLines []string
+	if boxed {
+		menuLines = e.menuFrame(m, BW)
+	} else if m.kind != "" {
+		e.clampSel(len(m.items))
+		if len(m.items) == 0 {
+			menuLines = append(menuLines, "    "+Weak(m.empty))
 		}
-		if strings.HasPrefix(nm, base) {
-			if en.IsDir() {
-				nm += "/"
+		for i, it := range m.items {
+			if i == menuRows {
+				break
 			}
-			ms = append(ms, nm)
-		}
-	}
-	if len(ms) == 0 {
-		return true
-	}
-	p := ms[0]
-	for _, c := range ms[1:] {
-		for !strings.HasPrefix(c, p) {
-			p = p[:len(p)-1]
-		}
-	}
-	if len(ms) == 1 && !strings.HasSuffix(p, "/") {
-		p += " "
-	}
-	if len(p) > len(base) {
-		e.insert([]rune(p[len(base):]))
-		return true
-	}
-	e.render(true)
-	var parts []string
-	for i, c := range ms {
-		if i == 24 {
-			parts = append(parts, Weak(fmt.Sprintf("+%d more", len(ms)-24)))
-			break
-		}
-		parts = append(parts, Accent(c))
-	}
-	Printf("\r\n  %s\r\n", strings.Join(parts, Weak("  ")))
-	e.curRow = 0
-	return true
-}
-
-func clip(s string, n int) string {
-	if n <= 0 {
-		return ""
-	}
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	if n == 1 {
-		return "…"
-	}
-	return string(r[:n-1]) + "…"
-}
-
-// ---------- choosers ----------
-
-// rawKeys runs fn for each key in raw mode until fn returns true.
-// Keys are reported as names: "up", "down", "left", "right", "enter", "space",
-// "tab", "esc", "ctrl-c", or the typed character.
-func rawKeys(fn func(key string) bool) bool {
-	fd := int(os.Stdin.Fd())
-	old, err := term.MakeRaw(fd)
-	if err != nil {
-		return false
-	}
-	defer term.Restore(fd, old)
-	for {
-		r, _, err := In.ReadRune()
-		if err != nil {
-			fn("ctrl-c")
-			return true
-		}
-		k := string(r)
-		switch r {
-		case '\r', '\n':
-			k = "enter"
-		case ' ':
-			k = "space"
-		case '\t':
-			k = "tab"
-		case 3, 4:
-			k = "ctrl-c"
-		case 16:
-			k = "up"
-		case 14:
-			k = "down"
-		case 27:
-			k = "esc"
-			if In.Buffered() > 0 {
-				n, _, _ := In.ReadRune()
-				if n == '[' || n == 'O' {
-					seq := ""
-					for {
-						c, _, err := In.ReadRune()
-						if err != nil {
-							break
-						}
-						seq += string(c)
-						if c >= 0x40 && c <= 0x7e {
-							break
-						}
-					}
-					k = map[string]string{"A": "up", "B": "down", "C": "right", "D": "left"}[seq]
-				}
+			mark := "  "
+			if i == e.sel {
+				mark = Accent("▸ ")
 			}
-		}
-		if k != "" && fn(k) {
-			return true
+			menuLines = append(menuLines, clipStyled("  "+mark+Ink(it.Name)+"  "+Sub(it.Desc), W-1))
 		}
 	}
-}
-
-// Choose shows options inline ("  ? ▸ Yes   No") and returns the picked index.
-// ← → or Tab move, Enter picks, the first letter of an option picks it, Esc picks cancel.
-func Choose(prefix string, options []string, def, cancel int) int {
-	if !StdinTTY() || !IsTTY() {
-		ans, err := ReadLine(prefix + Weak("["+strings.Join(options, "/")+"] "))
-		if err != nil {
-			return cancel
-		}
-		a := strings.ToLower(strings.TrimSpace(ans))
-		if a == "" {
-			return def
-		}
-		for i, o := range options {
-			if strings.HasPrefix(strings.ToLower(o), a[:1]) {
-				return i
-			}
-		}
-		return cancel
+	top = append(top, menuLines...)
+	for _, l := range top {
+		sb.WriteString(l + "\x1b[K\r\n")
 	}
-	sel := def
-	draw := func() {
-		var parts []string
-		for i, o := range options {
-			if i == sel {
-				parts = append(parts, Accent("▸ ")+Bold(o))
-			} else {
-				parts = append(parts, "  "+Weak(o))
-			}
-		}
-		Printf("\r\x1b[2K%s%s  %s", prefix, strings.Join(parts, "  "), Weak("← → enter"))
+	foot := ""
+	switch {
+	case e.hint != "":
+		foot = "  " + Accent("■ ") + Sub(e.hint)
+	case m.kind == "/" || m.kind == "arg":
+		foot = "  " + Weak("↑ ↓ select · tab complete · enter run · esc close")
+	case m.kind == "@":
+		foot = "  " + Weak("↑ ↓ select · tab or enter pick · esc close")
+	case e.Footer != nil:
+		foot = e.Footer(string(e.buf))
 	}
-	Printf("\x1b[?25l")
-	draw()
-	rawKeys(func(k string) bool {
-		switch k {
-		case "left", "up":
-			sel = (sel + len(options) - 1) % len(options)
-		case "right", "down", "tab":
-			sel = (sel + 1) % len(options)
-		case "enter", "space":
-			return true
-		case "esc", "ctrl-c":
-			sel = cancel
-			return true
-		default:
-			for i, o := range options {
-				if strings.EqualFold(k, o[:1]) {
-					sel = i
-					return true
-				}
-			}
+	if boxed {
+		edge := hair("┌" + strings.Repeat("─", BW-2) + "┐")
+		if len(menuLines) > 0 {
+			edge = hair("├" + strings.Repeat("─", BW-2) + "┤")
 		}
-		draw()
-		return false
-	})
-	// settle on the chosen answer only
-	Printf("\r\x1b[2K%s%s\r\n\x1b[?25h", prefix, Accent("■ ")+Ink(options[sel]))
-	return sel
-}
-
-// Checklist lets the user tick rows with ↑ ↓ and Space, Enter to confirm.
-// It returns the indexes that are ticked.
-func Checklist(rows []string, ticked []bool) []int {
-	on := append([]bool(nil), ticked...)
-	for len(on) < len(rows) {
-		on = append(on, false)
-	}
-	if !StdinTTY() || !IsTTY() {
-		Numbered(rows)
-		ans, _ := ReadLine("  " + Ink("Which ones? ") + Weak("numbers like 1,2 · Enter = ticked "))
-		ans = strings.TrimSpace(ans)
-		if ans != "" {
-			for i := range on {
-				on[i] = false
-			}
-			for _, f := range strings.FieldsFunc(ans, func(r rune) bool { return r == ',' || r == ' ' }) {
-				var n int
-				if _, err := fmt.Sscan(f, &n); err == nil && n >= 1 && n <= len(rows) {
-					on[n-1] = true
-				}
-			}
-		}
-		return picked(on)
-	}
-	cur := 0
-	W := termWidth()
-	draw := func(first bool) {
-		if !first {
-			Printf("\x1b[%dA", len(rows)+1)
-		}
+		sb.WriteString("  " + edge + "\r\n")
 		for i, r := range rows {
-			box := Weak("□")
-			if on[i] {
-				box = Accent("■")
-			}
-			ptr := "  "
-			if i == cur {
-				ptr = Accent("▸ ")
-			}
-			line := "  " + ptr + box + "  " + Weak(fmt.Sprintf("%02d", i+1)) + "  " + r
-			if width(line) > W-1 {
-				line = "  " + ptr + box + "  " + Weak(fmt.Sprintf("%02d", i+1)) + "  " + clip(ansi.ReplaceAllString(r, ""), W-12)
-			}
-			Printf("\r\x1b[2K%s\r\n", line)
+			sb.WriteString("  " + hair("│") + " " + line(i, r) + " " + hair("│") + "\r\n")
 		}
-		Printf("\r\x1b[2K  %s\r\n", Weak("↑ ↓ move · space tick · enter done"))
+		sb.WriteString("  " + hair("└"+strings.Repeat("─", BW-2)+"┘"))
+		total := len(top) + 1 + len(rows) + 1
+		if foot != "" {
+			sb.WriteString("\r\n" + clipStyled(foot, W-2))
+			total++
+		}
+		target := len(top) + 1 + cr
+		if up := total - 1 - target; up > 0 {
+			sb.WriteString("\x1b[" + itoa(up) + "A")
+		}
+		sb.WriteString("\r\x1b[" + itoa(4+pw+cc) + "C")
+		e.curRow = target
+		return sb.String()
 	}
-	Printf("\x1b[?25l")
-	draw(true)
-	rawKeys(func(k string) bool {
-		switch k {
-		case "up", "k":
-			cur = (cur + len(rows) - 1) % len(rows)
-		case "down", "j", "tab":
-			cur = (cur + 1) % len(rows)
-		case "space", "x":
-			on[cur] = !on[cur]
-		case "enter":
-			return true
-		case "esc", "ctrl-c":
-			for i := range on {
-				on[i] = false
-			}
-			return true
-		default:
-			var n int
-			if _, err := fmt.Sscan(k, &n); err == nil && n >= 1 && n <= len(rows) {
-				cur = n - 1
-				on[cur] = !on[cur]
-			}
+	for i, r := range rows {
+		if i > 0 {
+			sb.WriteString("\r\n")
 		}
-		draw(false)
-		return false
-	})
-	draw(false)
-	Printf("\x1b[1A\r\x1b[2K\x1b[?25h")
-	return picked(on)
+		sb.WriteString(line(i, r))
+	}
+	total := len(top) + len(rows)
+	if foot != "" && live {
+		sb.WriteString("\r\n" + clipStyled(foot, W-2))
+		total++
+	}
+	target := len(top) + cr
+	if up := total - 1 - target; up > 0 {
+		sb.WriteString("\x1b[" + itoa(up) + "A")
+	}
+	sb.WriteString("\r")
+	if c := pw + cc; c > 0 {
+		sb.WriteString("\x1b[" + itoa(c) + "C")
+	}
+	e.curRow = target
+	return sb.String()
 }
 
-func picked(on []bool) []int {
-	var out []int
-	for i, v := range on {
-		if v {
-			out = append(out, i)
-		}
-	}
-	return out
-}
+var _ = unicode.IsLetter

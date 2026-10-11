@@ -99,14 +99,6 @@ func AccentLabel(s string) string {
 	return Accent(strings.Join(parts, " "))
 }
 
-func Printf(format string, a ...any) {
-	outMu.Lock()
-	fmt.Fprintf(Out, format, a...)
-	Out.Flush()
-	outMu.Unlock()
-}
-
-func Println(s string) { Printf("%s\n", s) }
 
 var ansi = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
@@ -171,8 +163,19 @@ func Step(s string) { Println("  " + Weak("·") + " " + Sub(s)) }
 // ---------- input ----------
 
 func ReadLine(prompt string) (string, error) {
-	Printf("%s", prompt)
-	s, err := In.ReadString('\n')
+	var s string
+	var err error
+	withModal(func() {
+		edMu.Lock()
+		raw := rawActive
+		edMu.Unlock()
+		if raw { // the open prompt has the terminal in raw mode: echo it ourselves
+			s, err = readRawLine(prompt)
+			return
+		}
+		Printf("%s", prompt)
+		s, err = In.ReadString('\n')
+	})
 	return strings.TrimRight(s, "\r\n"), err
 }
 
@@ -180,8 +183,12 @@ func Prompt() string { return "\n" + Accent("›") + " " }
 
 // Confirm shows the app's confirm card, then an arrow-key Yes / No.
 func Confirm(title, detail string) bool {
-	Box(AccentLabel(title), wrapLines(detail, []string{Ink(detail)}))
-	return Choose("  "+Accent("?")+" ", []string{"Yes", "No"}, 1, 1) == 0
+	ok := false
+	withModal(func() {
+		Box(AccentLabel(title), wrapLines(detail, []string{Ink(detail)}))
+		ok = choose("  "+Accent("?")+" ", []string{"Yes", "No"}, 1, 1) == 0
+	})
+	return ok
 }
 
 func wrapLines(detail string, lines []string) []string {
@@ -199,11 +206,16 @@ func wrapLines(detail string, lines []string) []string {
 
 // Secret reads a line without echo when possible (API keys).
 func Secret(prompt string) string {
-	Printf("%s", prompt)
-	if s, ok := readHidden(); ok {
-		Println("")
-		return strings.TrimSpace(s)
-	}
-	s, _ := In.ReadString('\n')
-	return strings.TrimSpace(s)
+	var out string
+	withModal(func() {
+		Printf("%s", prompt)
+		if s, ok := readHidden(); ok {
+			Println("")
+			out = strings.TrimSpace(s)
+			return
+		}
+		s, _ := In.ReadString('\n')
+		out = strings.TrimSpace(s)
+	})
+	return out
 }
