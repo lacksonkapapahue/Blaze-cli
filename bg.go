@@ -23,6 +23,7 @@ import (
 	"github.com/lacksonkapapahue/blaze-cli/internal/agents"
 	"github.com/lacksonkapapahue/blaze-cli/internal/config"
 	"github.com/lacksonkapapahue/blaze-cli/internal/llm"
+	"github.com/lacksonkapapahue/blaze-cli/internal/mcp"
 	"github.com/lacksonkapapahue/blaze-cli/internal/notify"
 	"github.com/lacksonkapapahue/blaze-cli/internal/steps"
 	"github.com/lacksonkapapahue/blaze-cli/internal/tools"
@@ -225,10 +226,11 @@ func (b *bgAgents) tools(ag *agents.Agent) []llm.Tool {
 	all := tools.All()
 	all = append(all, notifyTool())
 	all = append(all, getConns().Tools()...)
+	all = append(all, getMCP().Tools()...)
 	if b.plan(ag) {
 		var ro []llm.Tool
 		for _, t := range all {
-			if tools.PlanAllows(t.Function.Name) || getConns().ReadOnly(t.Function.Name) {
+			if tools.PlanAllows(t.Function.Name) || getConns().ReadOnly(t.Function.Name) || getMCP().ReadOnly(t.Function.Name) {
 				ro = append(ro, t)
 			}
 		}
@@ -286,7 +288,7 @@ func (b *bgAgents) exec(ctx context.Context, ag *agents.Agent, name, args string
 	if agents.IsMainTool(name) || name == "update_blaze" {
 		return "Error: background agents and specialists can't start or steer other agents or update Blaze. Do the work yourself."
 	}
-	if b.plan(ag) && !(tools.PlanAllows(name) || getConns().ReadOnly(name)) {
+	if b.plan(ag) && !(tools.PlanAllows(name) || getConns().ReadOnly(name) || getMCP().ReadOnly(name)) {
 		return agent.PlanRefusal
 	}
 	if why := b.block(ag, name, args); why != "" {
@@ -294,6 +296,16 @@ func (b *bgAgents) exec(ctx context.Context, ag *agents.Agent, name, args string
 	}
 	if name == "notify" {
 		return runNotify(args)
+	}
+	if getMCP().Handles(name) { // before connectors: they claim every "mcp_" name
+		// A sub-agent's approval waits for the main loop, like a connector's.
+		return getMCP().Call(context.WithValue(ctx, agentKey{}, ag.Handle), name, args, mcp.Policy{
+			Plan:      b.plan(ag),
+			Autopilot: b.main.Autopilot(),
+			Ask: func(ctx context.Context, title, detail string) (bool, bool) {
+				return b.confirmConnector(ctx, title, detail, true)
+			},
+		})
 	}
 	if getConns().Handles(name) {
 		return getConns().Run(context.WithValue(ctx, agentKey{}, ag.Handle), name, args)

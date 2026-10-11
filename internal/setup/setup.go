@@ -252,6 +252,9 @@ func contains(s []string, v string) bool {
 }
 
 // Doctor checks every part and says what to fix.
+// DoctorExtra adds the host's own checks (MCP servers) to the doctor.
+var DoctorExtra func(add func(name string, ok bool, detail string))
+
 func Doctor(cfg *config.Config, in sysinfo.Info, version string) {
 	ui.Banner(version, "Checking everything Blaze depends on.")
 	type item struct {
@@ -334,6 +337,9 @@ func Doctor(cfg *config.Config, in sysinfo.Info, version string) {
 	}
 	n := len(sched.Load())
 	add("Scheduled jobs", true, fmt.Sprintf("%d", n))
+	if DoctorExtra != nil {
+		DoctorExtra(add)
+	}
 	add("Config", true, config.Dir())
 
 	var lines []string

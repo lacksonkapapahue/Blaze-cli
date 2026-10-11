@@ -32,13 +32,17 @@ blaze login [email|google|github|--signup]   sign in to your Blaze account
 blaze whoami · blaze logout    who's signed in · sign out (here and in Blaze Desktop)
 blaze connect [app] [--manual] list connectors, or connect google / github / notion / slack / spotify
 blaze disconnect APP
+blaze mcp list                 MCP servers: do they start, how many tools
+blaze mcp add NAME -- CMD ARGS…           add a local (stdio) MCP server (--env K=V before --)
+blaze mcp add NAME --url URL [--header K=V]   add a remote (Streamable HTTP) MCP server
+blaze mcp remove NAME · blaze mcp enable|disable NAME
 blaze skills [NAME]            skill library: list, show one, or on|off|delete|restore NAME
 blaze learn [on|off]           learn memories and skills automatically (shared with Desktop)
 ```
 `blaze update` (or `/update` in chat) uses `GITHUB_TOKEN`, or your `gh` login, while the repo is private.
 Blaze checks for a new version at most once a day and mentions it under the banner (`BLAZE_NO_UPDATE_CHECK=1` turns that off).
 Flags: `--autopilot` (or `--yolo`), `--plan`, `--model provider/model`.
-In chat: `/clear /model /plan /build /auto /autopilot /agents /login /whoami /logout /connect /notify /skills /learn /jobs /schedule /pc /doctor /setup /update /exit`. Ctrl-C stops the running task; Ctrl+O shows the last steps in full.
+In chat: `/clear /model /plan /build /auto /autopilot /agents /login /whoami /logout /connect /mcp /notify /skills /learn /jobs /schedule /pc /doctor /setup /update /exit`. Ctrl-C stops the running task; Ctrl+O shows the last steps in full.
 
 ### Modes (same as Blaze Desktop)
 | Mode | What it does |
@@ -81,6 +85,32 @@ under the same entry as Blaze Desktop, so signing in on one signs in both. `blaz
 is one click through the same service: the Worker holds the client secrets, tokens come back to the loopback and go into the
 keychain. Connected apps become tools (Gmail, Calendar, Drive, GitHub issues, Notion pages…); sending or creating things
 asks first unless you choose "Always allow". `--manual` uses your own developer app instead. `BLAZE_CLOUD_URL` points at another Worker.
+
+### MCP servers
+Blaze is an MCP (Model Context Protocol) client. Servers live in `~/.blaze/mcp.json` (`$BLAZE_HOME/mcp.json`), the same
+file Blaze Desktop reads, in the usual shape:
+
+```json
+{
+  "mcpServers": {
+    "github": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"], "env": { "GITHUB_TOKEN": "${GITHUB_TOKEN}" } },
+    "docs":   { "url": "https://example.com/mcp", "headers": { "Authorization": "Bearer ${DOCS_TOKEN}" } },
+    "old":    { "command": "old-server", "disabled": true }
+  }
+}
+```
+
+A project can add its own in `.mcp.json` or `.blaze/mcp.json` in the folder you start Blaze in; a project server with the
+same name replaces the global one. `${VAR}` and `${VAR:-default}` are filled from your environment, so tokens don't have
+to sit in the file. Local servers talk JSON-RPC over stdin/stdout; remote ones use Streamable HTTP (JSON or event-stream
+replies, `Mcp-Session-Id` sessions). The old HTTP+SSE transport isn't supported.
+
+Servers start in the background when a chat opens, so startup isn't slower; one that fails is mentioned once and skipped
+(`/mcp` says why). Their tools reach the model as `mcp__<server>__<tool>`. In **Auto** each call asks first (Yes / Always
+allow / No; "Always allow" is kept per server and tool in `~/.blaze/mcp-allow.json`), in **Autopilot** they just run, and in
+**Plan** only tools that declare `readOnlyHint: true` are offered. Text answers go to the model; images and other content
+are noted but not shown. `/mcp` shows each server (connected with N tools, failed and why, turned off), `/mcp reload`
+restarts them after you edit the file, and `blaze doctor` checks that each one starts.
 
 ### Notifications and updates
 Blaze shows native notifications (notify-send / dunstify on Linux, terminal-notifier or osascript on macOS, a PowerShell toast

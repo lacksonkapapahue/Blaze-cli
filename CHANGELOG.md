@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.8.0 — MCP servers
+
+- **Blaze can use MCP (Model Context Protocol) servers.** Add one with `blaze mcp add github -- npx -y
+  @modelcontextprotocol/server-github` (a local server; `--env K=V` before `--`) or `blaze mcp add docs --url
+  https://example.com/mcp --header Authorization="Bearer …"` (a remote one). They live in `~/.blaze/mcp.json` in the usual
+  `{"mcpServers": {…}}` shape, the same file Blaze Desktop reads; a folder's `.mcp.json` or `.blaze/mcp.json` adds its own,
+  and a project server replaces a global one with the same name. `${VAR}` in the file is filled from your environment.
+- **Their tools just show up.** Servers start in the background when a chat opens, so Blaze doesn't start slower; each
+  server's tools reach the model as `mcp__<server>__<tool>`. A server that won't start is mentioned once and skipped.
+  While working Blaze says it in plain words ("Asking Github to list issues").
+- **Same safety as everything else.** In Auto each MCP call asks first, with "Always allow" remembered per server and tool
+  (`~/.blaze/mcp-allow.json`); Autopilot runs them; Plan only offers tools that say they only read (`readOnlyHint`).
+  Background agents and specialists get the same tools under the same rules; their approvals wait at the prompt.
+- `blaze mcp list | add | remove | enable | disable` and `/mcp` in chat (connected with N tools, failed and why, turned
+  off; `/mcp reload` after editing the file). `blaze doctor` checks that each server starts.
+- Under the hood: a small pure-Go client (`internal/mcp`) for stdio (newline-delimited JSON-RPC, the server in its own
+  process group so Ctrl-C doesn't reach it, stopped with everything it started when Blaze exits; no console window on
+  Windows) and Streamable HTTP (JSON or event-stream replies, `Mcp-Session-Id`, `MCP-Protocol-Version`). It asks for
+  protocol 2025-06-18 and falls back to older versions; `tools/list` follows pages; a server that dies is restarted once.
+  Text comes back to the model; images and other content are noted. The old HTTP+SSE transport isn't supported.
+- Tests: a fake stdio server (the test binary itself) and an HTTP one: handshake, version fallback, pages, calls, tool
+  errors, crashes, sessions, config merging and editing, and Plan/Auto/Autopilot gating through the agent.
+
 ## v0.7.2 — /clear really clears
 
 - **`/clear` (and `/new`) now wipe the terminal and start over.** Besides starting a new conversation, Blaze erases the

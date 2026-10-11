@@ -834,6 +834,9 @@ func orStr(a, b string) string {
 
 var mcpRe = regexp.MustCompile(`(?i)^mcp_([a-z0-9]+)_(.+)$`)
 
+// mcpServerRe is an MCP server's tool from mcp.json: mcp__<server>__<tool>.
+var mcpServerRe = regexp.MustCompile(`^mcp__(.+?)__(.+)$`)
+
 // Describe is a tool call as a short plain phrase.
 func Describe(name, rawArgs string) string {
 	var a map[string]any
@@ -919,6 +922,13 @@ func Describe(name, rawArgs string) string {
 	}
 	if s, ok := conn[name]; ok {
 		return s
+	}
+	if m := mcpServerRe.FindStringSubmatch(name); m != nil {
+		server := capFirst(words(m[1]))
+		if t := words(m[2]); t != "" {
+			return orStr(summary, clip("Asking "+server+" to "+t, Max))
+		}
+		return orStr(summary, clip("Using "+server, Max))
 	}
 	if m := mcpRe.FindStringSubmatch(name); m != nil {
 		return orStr(summary, clip("Using "+capFirst(words(m[1]))+": "+words(m[2]), Max))
