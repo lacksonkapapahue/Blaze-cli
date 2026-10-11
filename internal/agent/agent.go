@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/lacksonkapapahue/blaze-cli/internal/checkpoint"
@@ -29,6 +30,10 @@ type Agent struct {
 	spin    *ui.Spinner
 	diffed  bool // a diff was drawn for the current tool call
 	cur     *ui.ActStep
+
+	inMu  sync.Mutex
+	inbox []Note       // what the user said while the turn ran (inbox.go)
+	now   atomic.Value // what the turn is doing, in plain words (string)
 
 	// Approval is the approval mode: "auto" (risky actions ask first) or
 	// "autopilot" (nothing asks; catastrophic actions stay blocked; questions get
@@ -177,7 +182,9 @@ func (a *Agent) Ask(ctx context.Context, prompt string) (_ string, err error) {
 	a.trim()
 	started := time.Now()
 	act := &ui.Activity{}
+	a.setNow("reading your request")
 	defer func() {
+		a.setNow("")
 		a.cur = nil
 		act.Seconds = time.Since(started).Seconds()
 		if a.Quiet {
@@ -204,8 +211,11 @@ func (a *Agent) Ask(ctx context.Context, prompt string) (_ string, err error) {
 		if !deadline.IsZero() && time.Now().After(deadline) {
 			return final, fmt.Errorf("Autopilot stopped after %d minutes (its time budget); say \"continue\" to keep going", tools.AutopilotMinutes)
 		}
+		if step > 0 {
+			a.readNotes() // what the user said meanwhile steers this step
+		}
 		all := a.toolList()
-		msgs := append([]llm.Message{{Role: "system", Content: a.system()}}, a.History...)
+		msgs := append([]llm.Message{{Role: "system", Content: a.system()}}, a.historyCopy()...)
 		md := &ui.MD{}
 		if !a.Quiet {
 			a.spin.Start(steps.Thinking(step, lastPlain))
@@ -249,6 +259,10 @@ func (a *Agent) Ask(ctx context.Context, prompt string) (_ string, err error) {
 				a.push(llm.Message{Role: "user", Content: "[Autopilot] " + tools.AutoReply})
 				continue
 			}
+			// The user said something the turn hasn't read: one more step for it.
+			if a.readNotes() {
+				continue
+			}
 			if !a.Quiet {
 				ui.Worked(r.Route, len(act.Steps), time.Since(started))
 			}
@@ -263,6 +277,7 @@ func (a *Agent) Ask(ctx context.Context, prompt string) (_ string, err error) {
 			// call, its output and any diff wait behind Ctrl+O.
 			plain := steps.Describe(tc.Function.Name, tc.Function.Arguments)
 			lastPlain = plain
+			a.setNow(plain)
 			if !a.Quiet {
 				a.spin.Start(plain)
 			}

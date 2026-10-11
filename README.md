@@ -93,8 +93,19 @@ cap), each Build specialist in its own git worktree (or a copy of the folder) un
 more than the lead has (Plan lead → Plan specialists; Autopilot's budgets). When one reports back the main chat reviews its
 diff and applies or discards it; you can too with `/agents apply|reject NAME`.
 
-The prompt never goes away: while Blaze works the boxed chat bar stays under the working line (with the same "/" and "@"
-menus), and Enter queues what you type for its next turn (approvals and questions still take the keys while they are open). Handing work off ends the main turn at once.
+### Blaze is always available
+Message Blaze any time, even mid-task, and it answers right away; nothing waits in a queue. While Blaze works the boxed
+chat bar stays under the working line (same "/" and "@" menus; ← → Home End and Ctrl+A/E move the caret). Send a message
+and Blaze replies in a moment while the work carries on:
+- **A question** ("how's it going?", "what does this file do?") gets answered from the conversation and what Blaze and its
+  agents are doing.
+- **A correction or addition** ("only the ui tests", "also update the README") goes to the work in progress, which changes
+  course at its next step.
+- **"Stop" or "wait"** stops the work.
+- **Separate work** ("meanwhile, research X") goes to a background agent or specialists, so the main chat stays free.
+
+Everything said this way joins the conversation. Commands (`/…`), shell lines (`!…`) and `#` notes run when the current
+step is done. Approvals and questions still take the keys while they are open. Handing work off ends the main turn at once.
 
 While working Blaze says what it is doing in plain words ("Reading main.go", "Running the tests"), never commands or code. A
 finished turn folds into one line, `Worked · 5 steps · 12s · ctrl+o to expand`; **Ctrl+O** at the prompt shows the exact

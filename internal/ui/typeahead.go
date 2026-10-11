@@ -2,8 +2,8 @@ package ui
 
 // The composer stays open while Blaze works (v0.7.0). From the moment a turn starts
 // until it ends, a small reader owns the keyboard: what you type shows on the working
-// line ("› your words▏"), Enter queues it as your next message (it runs right after
-// the turn, in order, like Blaze Desktop's composer), and whatever is half-typed when
+// line ("› your words▏"), Enter sends it (OnSend answers it right away; commands
+// wait in a queue and run after the turn, in order), and whatever is half-typed when
 // the turn ends comes back in the prompt. A prompt that opens mid-turn (an approval,
 // a question) takes the keyboard over for as long as it is open and hands it back
 // after, so approvals keep working.
@@ -29,6 +29,7 @@ type typeahead struct {
 	stop    bool
 	done    chan struct{}
 	buf     []rune
+	cur     int // the caret, an index into buf (← → Home End move it)
 	queue   []string
 
 	// the composer's pop-up menu (dock.go)
@@ -36,6 +37,14 @@ type typeahead struct {
 	menuLine string
 	menuOff  string
 }
+
+// OnSend, when set, takes a message sent from the composer while a turn runs
+// (v0.9.1: Blaze answers right away instead of queueing it). It returns false to
+// queue the line instead (commands, shell lines).
+var OnSend func(line string) bool
+
+// turnOn reports whether a turn is running (the composer is open).
+func turnOn() bool { ta.mu.Lock(); defer ta.mu.Unlock(); return ta.on }
 
 var (
 	ta        typeahead
@@ -70,7 +79,7 @@ func StopTypeahead() string {
 	ta.mu.Lock()
 	defer ta.mu.Unlock()
 	rest := string(ta.buf)
-	ta.buf = nil
+	ta.buf, ta.cur = nil, 0
 	return rest
 }
 
@@ -192,59 +201,120 @@ func (t *typeahead) loop(done chan struct{}) {
 					break
 				}
 			}
-			k := map[string]string{"": "esc", "[A": "up", "OA": "up", "[B": "down", "OB": "down"}[seq]
+			k := map[string]string{"": "esc", "[A": "up", "OA": "up", "[B": "down", "OB": "down",
+				"[C": "right", "OC": "right", "[D": "left", "OD": "left", "[H": "home", "OH": "home", "[1~": "home", "[7~": "home",
+				"[F": "end", "OF": "end", "[4~": "end", "[8~": "end", "[3~": "del"}[seq]
 			if k != "" {
 				t.mu.Lock()
-				t.dockKey(k)
+				if used, _ := t.dockKey(k); !used {
+					t.move(k)
+				}
 				t.mu.Unlock()
 			}
 			continue
 		}
 		if line, ok := t.key(r); ok {
-			if spinners.Load() > 0 {
-				Above("  " + Accent("› ") + Ink(clip(line, termWidth()-20)) + Weak("  · queued, Blaze reads it next"))
-			}
+			t.send(line)
 		}
 	}
 }
 
-// key edits the typed line; it reports a line that Enter queued.
+// send hands a line Enter sent to OnSend (Blaze answers now), or queues it.
+func (t *typeahead) send(line string) {
+	if OnSend != nil && OnSend(line) {
+		return
+	}
+	t.mu.Lock()
+	t.queue = append(t.queue, line)
+	t.mu.Unlock()
+	if spinners.Load() > 0 {
+		Above("  " + Accent("› ") + Ink(clip(line, termWidth()-20)) + Weak("  · runs when this step is done"))
+	}
+}
+
+// typeKey is a key as the reader handles it (tests).
+func (t *typeahead) typeKey(r rune) {
+	if line, ok := t.key(r); ok {
+		t.send(line)
+	}
+}
+
+// move handles the caret keys. Called with t.mu held.
+func (t *typeahead) move(k string) {
+	if t.cur > len(t.buf) || t.cur < 0 {
+		t.cur = len(t.buf)
+	}
+	switch k {
+	case "left":
+		if t.cur > 0 {
+			t.cur--
+		}
+	case "right":
+		if t.cur < len(t.buf) {
+			t.cur++
+		}
+	case "home":
+		t.cur = 0
+	case "end":
+		t.cur = len(t.buf)
+	case "del":
+		if t.cur < len(t.buf) {
+			t.buf = append(t.buf[:t.cur], t.buf[t.cur+1:]...)
+		}
+	}
+}
+
+// key edits the typed line; it reports a line that Enter sent.
 func (t *typeahead) key(r rune) (string, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.cur > len(t.buf) || t.cur < 0 {
+		t.cur = len(t.buf)
+	}
 	switch r {
 	case '\t':
 		t.dockKey("tab")
 		return "", false
 	case '\r', '\n':
 		if used, submit := t.dockKey("enter"); used && !submit {
-			return "", false // filled in from the menu; Enter again queues it
+			return "", false // filled in from the menu; Enter again sends it
 		}
 		line := strings.TrimSpace(string(t.buf))
-		t.buf = nil
+		t.buf, t.cur = nil, 0
 		if line == "" {
 			return "", false
 		}
-		t.queue = append(t.queue, line)
 		return line, true
 	case 127, 8:
-		if n := len(t.buf); n > 0 {
-			t.buf = t.buf[:n-1]
+		if t.cur > 0 {
+			t.buf = append(t.buf[:t.cur-1], t.buf[t.cur:]...)
+			t.cur--
 		}
-	case 21: // Ctrl-U
-		t.buf = nil
-	case 23: // Ctrl-W
-		i := len(t.buf)
+	case 1: // Ctrl-A
+		t.cur = 0
+	case 5: // Ctrl-E
+		t.cur = len(t.buf)
+	case 2: // Ctrl-B
+		t.move("left")
+	case 6: // Ctrl-F
+		t.move("right")
+	case 21: // Ctrl-U: everything before the caret
+		t.buf = append([]rune(nil), t.buf[t.cur:]...)
+		t.cur = 0
+	case 23: // Ctrl-W: the word before the caret
+		i := t.cur
 		for i > 0 && t.buf[i-1] == ' ' {
 			i--
 		}
 		for i > 0 && t.buf[i-1] != ' ' {
 			i--
 		}
-		t.buf = t.buf[:i]
+		t.buf = append(t.buf[:i], t.buf[t.cur:]...)
+		t.cur = i
 	default:
 		if r >= 32 && r != utf8.RuneError {
-			t.buf = append(t.buf, r)
+			t.buf = append(t.buf[:t.cur], append([]rune{r}, t.buf[t.cur:]...)...)
+			t.cur++
 		}
 	}
 	return "", false
@@ -259,10 +329,10 @@ func typeaheadTail() string {
 	}
 	q := ""
 	if n := len(ta.queue); n > 0 {
-		q = Weak("  ·  ") + Accent(strconv.Itoa(n)+" queued")
+		q = Weak("  ·  ") + Accent(strconv.Itoa(n)+" waiting")
 	}
 	if len(ta.buf) == 0 {
-		return Weak("  ·  › type to queue a message") + q
+		return Weak("  ·  › message Blaze, it answers while it works") + q
 	}
 	s := ta.buf
 	if len(s) > 32 {

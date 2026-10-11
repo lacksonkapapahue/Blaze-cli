@@ -22,18 +22,18 @@ func TestDockDrawsTheComposerBox(t *testing.T) {
 	}
 	ta.on = true
 	out := plain(dockLines(80))
-	if !strings.Contains(out, "┌") || !strings.Contains(out, "└") || !strings.Contains(out, "Type your next message") {
+	if !strings.Contains(out, "┌") || !strings.Contains(out, "└") || !strings.Contains(out, "Message Blaze") {
 		t.Fatalf("empty composer:\n%s", out)
 	}
 	for _, r := range "fix the tests" {
-		ta.key(r)
+		ta.typeKey(r)
 	}
-	ta.key('\r')
+	ta.typeKey('\r')
 	for _, r := range "then commit" {
-		ta.key(r)
+		ta.typeKey(r)
 	}
 	out = plain(dockLines(80))
-	if !strings.Contains(out, "› then commit▏") || !strings.Contains(out, "1 queued") {
+	if !strings.Contains(out, "› then commit▏") || !strings.Contains(out, "1 waiting") {
 		t.Fatalf("composer:\n%s", out)
 	}
 	if typeaheadTail() != "" {
@@ -46,7 +46,7 @@ func TestDockDrawsTheComposerBox(t *testing.T) {
 	}
 	// long lines keep their end (where you type) in view
 	for range 200 {
-		ta.key('x')
+		ta.typeKey('x')
 	}
 	if out := plain(dockLines(60)); !strings.Contains(out, "…") || !strings.Contains(out, "x▏") {
 		t.Fatalf("long line:\n%s", out)
@@ -69,7 +69,7 @@ func TestDockMenuPicksLikeThePrompt(t *testing.T) {
 	}
 	ta.on = true
 	for _, r := range "read @" {
-		ta.key(r)
+		ta.typeKey(r)
 	}
 	if out := plain(dockLines(80)); !strings.Contains(out, "F I L E S") || !strings.Contains(out, "▸ main.go") {
 		t.Fatalf("menu:\n%s", out)
@@ -77,7 +77,7 @@ func TestDockMenuPicksLikeThePrompt(t *testing.T) {
 	ta.mu.Lock()
 	ta.dockKey("down")
 	ta.mu.Unlock()
-	ta.key('\t')
+	ta.typeKey('\t')
 	if got := string(ta.buf); got != "read @src/" {
 		t.Fatalf("tab filled %q", got)
 	}
@@ -94,7 +94,7 @@ func TestDockMenuPicksLikeThePrompt(t *testing.T) {
 	}
 	// Esc closes the menu for this line
 	for _, r := range "@" {
-		ta.key(r)
+		ta.typeKey(r)
 	}
 	ta.mu.Lock()
 	ta.dockKey("esc")

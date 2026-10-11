@@ -20,29 +20,29 @@ func TestTypeaheadQueuesLines(t *testing.T) {
 	t.Cleanup(func() { color = old })
 	ta.on = true
 	for _, r := range "hi blaze\r" {
-		ta.key(r)
+		ta.typeKey(r)
 	}
 	for _, r := range "statsu" {
-		ta.key(r)
+		ta.typeKey(r)
 	}
-	ta.key(127) // backspace
-	ta.key(127)
+	ta.typeKey(127) // backspace
+	ta.typeKey(127)
 	for _, r := range "us?\n" {
-		ta.key(r)
+		ta.typeKey(r)
 	}
 	for _, r := range "half typed" {
-		ta.key(r)
+		ta.typeKey(r)
 	}
-	ta.key('\r')
-	ta.key('\r') // an empty line queues nothing
+	ta.typeKey('\r')
+	ta.typeKey('\r') // an empty line queues nothing
 	for _, r := range "two words" {
-		ta.key(r)
+		ta.typeKey(r)
 	}
-	ta.key(23) // ctrl-w
+	ta.typeKey(23) // ctrl-w
 	if got := string(ta.buf); got != "two " {
 		t.Fatalf("ctrl-w left %q", got)
 	}
-	if !strings.Contains(typeaheadTail(), "two") || !strings.Contains(typeaheadTail(), "3 queued") {
+	if !strings.Contains(typeaheadTail(), "two") || !strings.Contains(typeaheadTail(), "3 waiting") {
 		t.Errorf("working line = %q", typeaheadTail())
 	}
 	want := []string{"hi blaze", "status?", "half typed"}
@@ -118,5 +118,64 @@ func TestActivityToggle(t *testing.T) {
 	}
 	if !strings.Contains(workedText(5, 12), "Worked · 5 steps · 12s · ctrl+o to expand") {
 		t.Errorf("worked line = %q", workedText(5, 12))
+	}
+}
+
+func TestComposerCaretMoves(t *testing.T) {
+	resetTA(t)
+	ta.on = true
+	for _, r := range "helo world" {
+		ta.typeKey(r)
+	}
+	for i := 0; i < 7; i++ {
+		ta.move("left")
+	}
+	ta.typeKey('l') // "hello world"
+	if got := string(ta.buf); got != "hello world" || ta.cur != 4 {
+		t.Fatalf("insert at caret: %q cur=%d", got, ta.cur)
+	}
+	ta.move("home")
+	ta.move("del")
+	ta.move("end")
+	ta.typeKey(127)
+	if got := string(ta.buf); got != "ello worl" {
+		t.Fatalf("home/del/end/backspace: %q", got)
+	}
+	ta.typeKey(1) // ctrl-a
+	ta.move("right")
+	ta.typeKey(21) // ctrl-u: before the caret
+	if got := string(ta.buf); got != "llo worl" || ta.cur != 0 {
+		t.Fatalf("ctrl-u: %q cur=%d", got, ta.cur)
+	}
+	got := ansi.ReplaceAllString(caretWindow([]rune("abcdefghij"), 3, 6), "")
+	if got != "abc▏d…" {
+		t.Errorf("caret window = %q", got)
+	}
+	got = ansi.ReplaceAllString(caretWindow([]rune("abcdefghij"), 10, 6), "")
+	if got != "…ghij▏" {
+		t.Errorf("caret window at end = %q", got)
+	}
+}
+
+func TestComposerSendsNotQueues(t *testing.T) {
+	resetTA(t)
+	ta.on = true
+	var sent []string
+	OnSend = func(l string) bool {
+		if strings.HasPrefix(l, "/") {
+			return false
+		}
+		sent = append(sent, l)
+		return true
+	}
+	t.Cleanup(func() { OnSend = nil })
+	for _, r := range "how's it going?\r/model auto\r" {
+		ta.typeKey(r)
+	}
+	if len(sent) != 1 || sent[0] != "how's it going?" {
+		t.Fatalf("sent %v", sent)
+	}
+	if q, ok := NextQueued(); !ok || q != "/model auto" {
+		t.Fatalf("a command should wait for the turn: %q %v", q, ok)
 	}
 }

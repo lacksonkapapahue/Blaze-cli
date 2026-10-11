@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.9.1 — Blaze is always available
+
+- **No more queue.** A message sent while Blaze works gets an answer right away, like Blaze Desktop and Hark: a side
+  lane reads the conversation, what the turn is doing and the background agents, and replies in a few sentences while
+  the work carries on. A correction or addition goes to the work in progress, which reads it at its next step and changes
+  course; "stop" stops it; separate work goes to a background agent or specialists. The exchange joins the conversation,
+  and anything the turn didn't get to before it ended is picked up right after. Commands, `!` shell lines and `#` notes
+  still wait for the step to finish.
+- **The caret moves in the composer box:** ← → Home End, Delete, Ctrl+A/E/B/F, and Ctrl+U/W edit around it. Long lines
+  scroll so the caret always shows.
+- The main chat's instructions now say it can be reached mid-turn, so it keeps handing long work to agents.
+
 ## v0.9.0 — Checkpoints: rewind code, chat or both
 
 - **Every message is a checkpoint (like Claude Code).** Before Blaze writes, edits or deletes a file it keeps the old
