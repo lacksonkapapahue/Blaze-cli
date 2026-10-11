@@ -273,6 +273,10 @@ func repl(a *agent.Agent, bg *bgAgents, in sysinfo.Info, cont bool) {
 		}
 		return ui.Accent("› ")
 	}
+	// the composer box under the working line looks and pops up menus like the prompt
+	ui.DockGlyph = func() string { return ed.Glyph("") }
+	ui.DockMenu = slashMenu
+	menuAgents = func() []agents.View { return bg.m.List(bg.conv) }
 	ed.Footer = func(line string) string {
 		switch {
 		case strings.HasPrefix(line, "!"):

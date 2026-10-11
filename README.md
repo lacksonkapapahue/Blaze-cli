@@ -41,7 +41,30 @@ blaze learn [on|off]           learn memories and skills automatically (shared w
 ```
 Blaze checks for a new version at most once a day and mentions it under the banner (`BLAZE_NO_UPDATE_CHECK=1` turns that off).
 Flags: `--autopilot` (or `--yolo`), `--plan`, `--model provider/model`.
-In chat: `/clear /model /plan /build /auto /autopilot /agents /login /whoami /logout /connect /mcp /notify /skills /learn /jobs /schedule /pc /doctor /setup /update /exit`. Ctrl-C stops the running task; Ctrl+O shows the last steps in full.
+In chat, type `/` and every command pops up above the box with what it does; Ctrl-C stops the running task and Ctrl+O shows
+the last steps in full.
+
+### Commands and their options
+You never have to remember an option. Type a command and a space (or pick a command marked `›` in the `/` menu) and its
+choices pop up above the box, filtered as you type: ↑ ↓ move, Enter or Tab picks, Esc closes. Choices marked `›` take
+another word, so picking one opens the next menu. The same menus work in the box while Blaze is working.
+
+| Command | Options that pop up |
+|---|---|
+| `/connect` | `list` · `google` · `github` · `notion` · `slack` · `spotify`, then `--manual` (use your own developer app) |
+| `/disconnect` | the apps: `google` · `github` · `notion` · `slack` · `spotify` |
+| `/login` | `email` · `google` · `github` · `signup` |
+| `/keys` | `list` · `sync` |
+| `/learn` | `on` · `off` |
+| `/model` | the models in your chain, then `auto` |
+| `/skills` | your skills (picking one starts a message that uses it) · `list` · `on` · `off` · `delete` · `restore`, then the skills each applies to |
+| `/mcp` | `list` · `reload` · `add` · `remove` · `enable` · `disable`, then your servers' names |
+| `/agents` | `list` · `new` · `msg` · `cancel` · `resume` · `discard` · `apply` · `reject` · `cap`, then this chat's agents (specialists for apply/reject, 1-6 for cap) |
+| `/update` | `--force` (reinstall the newest build) |
+| `@` | the folder's folders and files; picking a folder lists what's inside it |
+
+Commands with nothing to choose: `/clear` `/resume` `/compact` `/init` `/plan` `/build` `/auto` `/autopilot` `/jobs`
+`/schedule` `/whoami` `/logout` `/notify [text]` `/pc` `/doctor` `/setup` `/help` `/exit`.
 
 ### Modes (same as Blaze Desktop)
 | Mode | What it does |
@@ -70,8 +93,8 @@ cap), each Build specialist in its own git worktree (or a copy of the folder) un
 more than the lead has (Plan lead → Plan specialists; Autopilot's budgets). When one reports back the main chat reviews its
 diff and applies or discards it; you can too with `/agents apply|reject NAME`.
 
-The prompt never goes away: while Blaze works you can keep typing on the working line, and Enter queues the message for its
-next turn (approvals and questions still take the keys while they are open). Handing work off ends the main turn at once.
+The prompt never goes away: while Blaze works the boxed chat bar stays under the working line (with the same "/" and "@"
+menus), and Enter queues what you type for its next turn (approvals and questions still take the keys while they are open). Handing work off ends the main turn at once.
 
 While working Blaze says what it is doing in plain words ("Reading main.go", "Running the tests"), never commands or code. A
 finished turn folds into one line, `Worked · 5 steps · 12s · ctrl+o to expand`; **Ctrl+O** at the prompt shows the exact
@@ -139,7 +162,7 @@ for one shell. The library is copied from Blaze Desktop with `scripts/sync-skill
 | **Shift+Tab** | cycle modes: Build·Auto → Build·Autopilot → **Plan** (look and propose, nothing changes; then approve the plan to run it) |
 | **Checklist** | for multi-step work Blaze keeps a live plan card (■ done · ▸ doing · □ to do) |
 | **Diffs** | every file write or edit shows a coloured diff with +/- counts |
-| `@path` | attach a file or folder to your message (Tab completes paths) |
+| `@path` | attach a file or folder to your message: `@` opens a files menu above the box (folders first, filtered as you type) |
 | `!command` | run a command yourself; Blaze sees the output |
 | `#note` | save a note to Blaze's memory |
 | `BLAZE.md` | project instructions loaded every session (`AGENTS.md` / `CLAUDE.md` also work; `~/.blaze/BLAZE.md` is global). `/init` writes one |

@@ -30,6 +30,11 @@ type typeahead struct {
 	done    chan struct{}
 	buf     []rune
 	queue   []string
+
+	// the composer's pop-up menu (dock.go)
+	menuIdx  int
+	menuLine string
+	menuOff  string
 }
 
 var (
@@ -175,12 +180,23 @@ func (t *typeahead) loop(done chan struct{}) {
 		if err != nil {
 			return // woken (a prompt wants the keys, or the turn ended) or stdin closed
 		}
-		if r == 27 { // an escape sequence (arrows etc.): swallow it whole
+		if r == 27 { // Esc, or an escape sequence: ↑ ↓ move the menu, the rest is swallowed whole
+			seq := ""
 			for In.Buffered() > 0 {
 				c, _, err := In.ReadRune()
-				if err != nil || (c >= 0x40 && c <= 0x7e && c != '[' && c != 'O') {
+				if err != nil {
 					break
 				}
+				seq += string(c)
+				if c >= 0x40 && c <= 0x7e && c != '[' && c != 'O' {
+					break
+				}
+			}
+			k := map[string]string{"": "esc", "[A": "up", "OA": "up", "[B": "down", "OB": "down"}[seq]
+			if k != "" {
+				t.mu.Lock()
+				t.dockKey(k)
+				t.mu.Unlock()
 			}
 			continue
 		}
@@ -197,7 +213,13 @@ func (t *typeahead) key(r rune) (string, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	switch r {
+	case '\t':
+		t.dockKey("tab")
+		return "", false
 	case '\r', '\n':
+		if used, submit := t.dockKey("enter"); used && !submit {
+			return "", false // filled in from the menu; Enter again queues it
+		}
 		line := strings.TrimSpace(string(t.buf))
 		t.buf = nil
 		if line == "" {
@@ -232,8 +254,8 @@ func (t *typeahead) key(r rune) (string, bool) {
 func typeaheadTail() string {
 	ta.mu.Lock()
 	defer ta.mu.Unlock()
-	if !ta.on {
-		return ""
+	if !ta.on || dockUsable() {
+		return "" // the composer box under the working line shows it (dock.go)
 	}
 	q := ""
 	if n := len(ta.queue); n > 0 {

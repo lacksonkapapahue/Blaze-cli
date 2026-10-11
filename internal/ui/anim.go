@@ -176,7 +176,7 @@ func (s *Spinner) Start(text string) {
 			s.mu.Lock()
 			txt, since := s.text, s.since
 			s.mu.Unlock()
-			Printf("\r\x1b[2K%s", spinLine(i, txt, time.Since(since)))
+			drawLive(spinLine(i, txt, time.Since(since)))
 			select {
 			case <-stop:
 				return
@@ -239,7 +239,7 @@ func (s *Spinner) Stop() {
 	done := s.done
 	s.mu.Unlock()
 	<-done
-	Printf("\r\x1b[2K")
+	clearLive()
 	ShowCursor()
 }
 

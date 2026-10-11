@@ -15,6 +15,9 @@ func resetTA(t *testing.T) {
 
 func TestTypeaheadQueuesLines(t *testing.T) {
 	resetTA(t)
+	old := color
+	color = false // no composer box: the working line carries the one-line composer
+	t.Cleanup(func() { color = old })
 	ta.on = true
 	for _, r := range "hi blaze\r" {
 		ta.key(r)
