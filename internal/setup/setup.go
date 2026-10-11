@@ -299,6 +299,13 @@ func Doctor(cfg *config.Config, in sysinfo.Info, version string) {
 		}
 	}
 
+	// Memory (blaze.db, shared with Blaze Desktop)
+	if d := tools.DB(); d != nil {
+		add("Memory", true, fmt.Sprintf("%s · %d memories · schema v%d (shared with Blaze Desktop)", tools.DBPath(), d.CountMemories(), d.Version()))
+	} else {
+		add("Memory", false, tools.DBPath()+": "+trunc(tools.DBError(), 110))
+	}
+
 	// Shell
 	sh := tools.NewShell(in.Shell, in.ShellPath, in.Home)
 	r := sh.Run("echo blaze-ok", 20*time.Second)

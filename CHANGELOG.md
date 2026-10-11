@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.6.0 — Shared SQLite memory with Blaze Desktop
+
+- **Memories now live in `~/.blaze/blaze.db`**, the SQLite database Blaze Desktop moved to in v0.5.1, instead of
+  `memory.md`. `remember`, `recall`, `forget`, `#note`, end-of-turn learning and the prompt all read and write it, so the
+  CLI and Desktop see each other's facts at once and share memory ids. The prompt gets pinned memories plus the ones
+  that match the conversation (full-text, BM25) instead of every fact; `recall` searches the rest.
+- **One-time import:** an existing `memory.md` (+ `memory.meta.json`) is imported on first run without duplicates and
+  kept as `memory.md.migrated`; the CLI stops writing `memory.md`.
+- **Skills index:** the skills folder stays the source of truth and bundled-skill seeding is unchanged (idempotent,
+  never overwrites your edits); the CLI keeps the shared `skills` index in `blaze.db` up to date and uses its
+  full-text search to pick the skills for a conversation.
+- **Safe with Desktop open:** WAL, `busy_timeout` 5 s, `BEGIN IMMEDIATE` transactions, single-statement dedupe.
+  Migrations re-check the schema version under the write lock. A database from a newer Blaze (or one missing Blaze's
+  tables) is refused and left untouched; `blaze doctor` shows the database path, memory count and schema version.
+- `internal/store` is a vendor copy of Desktop's store (schema v1, `modernc.org/sqlite`, pure Go, no cgo); a test
+  pins the schema to Desktop's. The CLI never rewrites Desktop's tools index.
+- Tests: import idempotency and backups, CLI writes read through Desktop's queries (and back), four processes writing
+  at once on a fresh file, newer/broken schema refused without changing a byte.
+
 ## v0.5.0 — Skill library and proactive learning
 
 Brings Blaze Desktop v0.7.0's skill library and memory/skill learning to the terminal.
@@ -24,7 +43,7 @@ Brings Blaze Desktop v0.5.0's agent features to the terminal.
 - `@file` / `@folder` attachments as before (now covered by tests).
 - CI now runs on pull requests too, checks formatting and runs `go test`; releases still publish only from `main`.
 
-Not yet: SQLite memory (waits for the desktop's memory-db), screen vision, voice input.
+Not yet: screen vision, voice input (SQLite memory arrived in v0.6.0).
 
 ## v0.3.0
 Site look (boxed welcome, particles, ember spinner, boxed input) and the Claude Code-style harness: plan/auto modes, todo checklist, diffs, `@files`, `!` shell, `#` memory, BLAZE.md, `/init`, `/compact`, `/resume`, `-c`.

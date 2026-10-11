@@ -138,7 +138,31 @@ Risky commands (sudo, rm -rf, format, registry edits, force-push, reset --hard),
 project folder, installs and deletes ask first.
 
 ## Files
-`~/.blaze/` (or `BLAZE_HOME`): `config.json`, `memory.md`, `skills/` (+ `.bundled.json`), `desktop.json` (shared settings such as `learn.off`), `learn-workflows.json`, `schedule.json`, `logs/`, `venv/`.
+`~/.blaze/` (or `BLAZE_HOME`): `config.json`, `blaze.db` (memories + skills index, shared with Blaze Desktop), `skills/` (+ `.bundled.json`), `desktop.json` (shared settings such as `learn.off`), `learn-workflows.json`, `schedule.json`, `logs/`, `venv/`.
+
+## Memory (shared with Blaze Desktop)
+Since v0.6.0 memories live in `blaze.db`, the same SQLite file Blaze Desktop (v0.5.1+) uses, so a fact saved in
+the terminal shows up in Desktop straight away and the other way round. Memory ids (`#12`) are the same in both.
+
+| OS | blaze.db |
+|---|---|
+| Linux (Arch etc.) | `~/.blaze/blaze.db` (`/home/<you>/.blaze/blaze.db`) |
+| macOS | `~/.blaze/blaze.db` (`/Users/<you>/.blaze/blaze.db`) |
+| Windows | `%USERPROFILE%\.blaze\blaze.db` (`C:\Users\<you>\.blaze\blaze.db`) |
+
+`BLAZE_HOME` moves it (and everything else) for both apps.
+
+- **First run:** an existing `memory.md` (and its `memory.meta.json`) is imported once, duplicates skipped, and
+  kept as `memory.md.migrated` (`memory.md.migrated-<time>` if a backup is already there). The CLI never writes
+  `memory.md` again; if one reappears (an older Blaze, a hand edit) it is imported the same way on the next start.
+- **Skills** stay folders in `~/.blaze/skills/<name>/SKILL.md` (shared with Desktop and the Android app); bundled
+  skills are still seeded there without overwriting your edits, and `blaze.db` keeps the searchable index both apps use.
+- **Both open at once** is fine: WAL journal, a 5 s busy timeout, short write transactions, and dedupe in a single
+  statement so two apps saving the same fact keep one row.
+- **Newer database:** if `blaze.db` was written by a newer Blaze than this CLI knows, the CLI leaves it untouched,
+  runs without memory, and `blaze doctor` says to update. It never downgrades or rewrites the schema.
+- The SQLite driver is `modernc.org/sqlite` (pure Go, no cgo), so the six cross-builds are unchanged.
+  `internal/store` is a vendor copy of Desktop's `internal/store`; see the sync note at the top of `store.go`.
 
 ## Build
 Go 1.26+. `go build .` CI cross-builds six targets on every push and publishes them as a GitHub release.

@@ -1,19 +1,21 @@
 package tools
 
-// Memory (~/.blaze/memory.md, one "- fact (date)" line each, shared with Blaze
-// Desktop, which imports new lines into its database) and skills
-// (~/.blaze/skills/<name>/SKILL.md, shared with Desktop and the Android app).
+// Memory and skills live in ~/.blaze/blaze.db (internal/store), the same SQLite
+// file Blaze Desktop uses, so a fact the CLI saves shows up in Desktop at once
+// and the other way round. Skills stay folders (~/.blaze/skills/<name>/SKILL.md,
+// shared with Desktop and the Android app); the database keeps a searchable
+// index of them.
 //
-// v0.5: memories carry ids in the prompt (#n = the n-th fact) so remember can
-// replace a stale one and forget can target it; near-duplicates update the
-// existing line; the bundled skill pack is seeded on start (skills.go) and the
-// prompt lists only the skills that match the conversation.
+// v0.6: memory.md is imported once on first open (kept as memory.md.migrated)
+// and never written again. Memory ids (#12) are database ids, the same ones
+// Desktop shows. A turn gets the pinned memories plus the ones that match the
+// conversation; recall searches the rest.
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,59 +24,98 @@ import (
 
 	"github.com/lacksonkapapahue/blaze-cli/internal/config"
 	"github.com/lacksonkapapahue/blaze-cli/internal/skillpack"
+	"github.com/lacksonkapapahue/blaze-cli/internal/store"
 )
 
-func memFile() string { return filepath.Join(config.Dir(), "memory.md") }
+// Prompt budget for memories: up to MemMatches matches, within MemBudget tokens
+// (the same numbers Desktop uses).
+const (
+	MemMatches = 8
+	MemBudget  = 600
+)
 
-var dateRe = regexp.MustCompile(`\s*\((\d{4}-\d{2}-\d{2})\)\s*$`)
-
-// Fact is one saved memory line.
-type Fact struct {
-	ID   int // 1-based position among the facts
-	Text string
-	Date string
+// DB is the shared database, or nil (with the reason from DBError) when it
+// can't be opened. Blaze still runs without memory then.
+func DB() *store.DB {
+	d, err := store.Default()
+	if err != nil {
+		return nil
+	}
+	return d
 }
 
-// Facts reads memory.md (lines starting with "- "; other lines are kept as-is on rewrite).
-func Facts() []Fact {
-	b, _ := os.ReadFile(memFile())
-	var out []Fact
-	for _, l := range strings.Split(string(b), "\n") {
-		t := strings.TrimSpace(l)
-		if !strings.HasPrefix(t, "- ") && !strings.HasPrefix(t, "* ") {
-			continue
-		}
-		t = strings.TrimSpace(t[2:])
-		d := ""
-		if m := dateRe.FindStringSubmatch(t); m != nil {
-			d = m[1]
-			t = strings.TrimSpace(dateRe.ReplaceAllString(t, ""))
-		}
-		if t != "" {
-			out = append(out, Fact{ID: len(out) + 1, Text: t, Date: d})
-		}
+// DBError says why the database can't be used ("" when it can).
+func DBError() string {
+	if _, err := store.Default(); err != nil {
+		return err.Error()
+	}
+	return ""
+}
+
+// DBPath is where blaze.db lives.
+func DBPath() string { return filepath.Join(config.Dir(), "blaze.db") }
+
+func memErr() string {
+	err := errNoDB()
+	if errors.Is(err, store.ErrNewerSchema) {
+		return "Error: " + err.Error() + ". Tell the user."
+	}
+	return "Error: Blaze's memory database can't be opened (" + DBError() + ")."
+}
+
+func errNoDB() error {
+	if _, err := store.Default(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Fact is one saved memory.
+type Fact struct {
+	ID   int64 // database id, shared with Desktop
+	Text string
+	Date string // last changed, YYYY-MM-DD
+}
+
+func toFacts(ms []store.Memory) []Fact {
+	out := make([]Fact, 0, len(ms))
+	for _, m := range ms {
+		out = append(out, Fact{ID: m.ID, Text: m.Text, Date: m.Updated.Format("2006-01-02")})
 	}
 	return out
 }
 
-func writeFacts(fs []Fact) error {
-	_ = os.MkdirAll(config.Dir(), 0o700)
-	var b strings.Builder
-	for _, f := range fs {
-		if f.Date != "" {
-			fmt.Fprintf(&b, "- %s (%s)\n", f.Text, f.Date)
-		} else {
-			fmt.Fprintf(&b, "- %s\n", f.Text)
-		}
+// Facts lists every saved memory, oldest first.
+func Facts() []Fact {
+	d := DB()
+	if d == nil {
+		return nil
 	}
-	return os.WriteFile(memFile(), []byte(b.String()), 0o600)
+	return toFacts(d.Memories())
 }
 
-// Memory is the memory block of the system prompt, with ids.
-func Memory() string {
+// Memory is the memory block of the system prompt for a conversation about
+// query: the pinned memories plus the best matches, with their ids.
+func Memory(query string) string {
+	d := DB()
+	if d == nil {
+		return ""
+	}
+	total := d.CountMemories()
+	if total == 0 {
+		return ""
+	}
+	ms := d.ForPrompt(query, MemMatches, MemBudget)
 	var b strings.Builder
-	for _, f := range Facts() {
-		fmt.Fprintf(&b, "- %s [#%d]\n", f.Text, f.ID)
+	if total > len(ms) {
+		fmt.Fprintf(&b, "(%d of %d saved memories, picked for this conversation; recall(query) searches the rest)\n", len(ms), total)
+	}
+	for _, m := range ms {
+		pin := ""
+		if m.Pinned {
+			pin = " pinned"
+		}
+		fmt.Fprintf(&b, "- %s [#%d%s]\n", m.Text, m.ID, pin)
 	}
 	return strings.TrimSpace(b.String())
 }
@@ -83,120 +124,51 @@ func norm(s string) []string {
 	return strings.FieldsFunc(strings.ToLower(s), func(r rune) bool { return !(unicode.IsLetter(r) || unicode.IsDigit(r)) })
 }
 
-// similar is the Jaccard overlap of two texts' word sets.
-func similar(a, b string) float64 {
-	wa, wb := map[string]bool{}, map[string]bool{}
-	for _, w := range norm(a) {
-		wa[w] = true
-	}
-	for _, w := range norm(b) {
-		wb[w] = true
-	}
-	if len(wa) == 0 || len(wb) == 0 {
-		return 0
-	}
-	in := 0
-	for w := range wa {
-		if wb[w] {
-			in++
-		}
-	}
-	return float64(in) / float64(len(wa)+len(wb)-in)
-}
-
 // Near is the overlap at or above which two facts count as the same one.
-const Near = 0.85
+const Near = store.Near
 
 // AddFact saves a fact: identical text is kept once, a near-duplicate is
 // updated in place. status is "added", "exists" or "updated".
-func AddFact(text string) (id int, status string, err error) {
-	text = strings.Join(strings.Fields(text), " ")
-	fs := Facts()
-	best, bs := -1, 0.0
-	for i, f := range fs {
-		if strings.EqualFold(strings.Join(norm(f.Text), " "), strings.Join(norm(text), " ")) {
-			return f.ID, "exists", nil
-		}
-		if s := similar(f.Text, text); s > bs {
-			best, bs = i, s
-		}
+func AddFact(text string) (id int64, status string, err error) {
+	d := DB()
+	if d == nil {
+		return 0, "", errNoDB()
 	}
-	today := time.Now().Format("2006-01-02")
-	if best >= 0 && bs >= Near {
-		fs[best].Text, fs[best].Date = text, today
-		return fs[best].ID, "updated", writeFacts(fs)
-	}
-	fs = append(fs, Fact{ID: len(fs) + 1, Text: text, Date: today})
-	return len(fs), "added", writeFacts(fs)
+	return d.Add(text, "", "", time.Time{})
 }
 
 // ReplaceFact rewrites fact #id.
-func ReplaceFact(id int, text string) error {
-	fs := Facts()
-	if id < 1 || id > len(fs) {
+func ReplaceFact(id int64, text string) error {
+	d := DB()
+	if d == nil {
+		return errNoDB()
+	}
+	if _, ok := d.Memory(id); !ok {
 		return fmt.Errorf("no memory #%d", id)
 	}
-	fs[id-1].Text, fs[id-1].Date = strings.Join(strings.Fields(text), " "), time.Now().Format("2006-01-02")
-	return writeFacts(fs)
+	return d.Edit(id, text)
 }
 
 // Related lists saved facts that look like the same subject (overlap ≥ lo, < Near).
-func Related(text string, lo float64, limit, skip int) []Fact {
-	type sc struct {
-		f Fact
-		s float64
+func Related(text string, lo float64, limit int, skip int64) []Fact {
+	d := DB()
+	if d == nil {
+		return nil
 	}
-	var all []sc
-	for _, f := range Facts() {
-		if f.ID == skip {
-			continue
-		}
-		if s := similar(f.Text, text); s >= lo && s < Near {
-			all = append(all, sc{f, s})
-		}
-	}
-	sort.Slice(all, func(i, j int) bool { return all[i].s > all[j].s })
-	var out []Fact
-	for i := 0; i < len(all) && i < limit; i++ {
-		out = append(out, all[i].f)
-	}
-	return out
+	return toFacts(d.Related(text, lo, limit, skip))
 }
 
-// SearchFacts returns the facts sharing the most words with q.
+// SearchFacts returns the facts that best match q (full-text, BM25).
 func SearchFacts(q string, limit int) []Fact {
-	type sc struct {
-		f Fact
-		n int
+	d := DB()
+	if d == nil {
+		return nil
 	}
-	words := map[string]bool{}
-	for _, w := range norm(q) {
-		if len(w) > 2 {
-			words[w] = true
-		}
-	}
-	var all []sc
-	for _, f := range Facts() {
-		n := 0
-		for _, w := range norm(f.Text) {
-			if words[w] {
-				n++
-			}
-		}
-		if n > 0 {
-			all = append(all, sc{f, n})
-		}
-	}
-	sort.SliceStable(all, func(i, j int) bool { return all[i].n > all[j].n })
-	var out []Fact
-	for i := 0; i < len(all) && i < limit; i++ {
-		out = append(out, all[i].f)
-	}
-	return out
+	return toFacts(d.Search(q, limit))
 }
 
-func memID(s string) (int, bool) {
-	n, err := strconv.Atoi(strings.TrimPrefix(strings.TrimSpace(s), "#"))
+func memID(s string) (int64, bool) {
+	n, err := strconv.ParseInt(strings.TrimPrefix(strings.TrimSpace(s), "#"), 10, 64)
 	return n, err == nil && n > 0
 }
 
@@ -210,28 +182,81 @@ type Skill struct {
 	Off              bool // turned off (/skills off): kept on disk, left out of the prompt
 }
 
-// Skills lists ~/.blaze/skills/*/SKILL.md (same format as Desktop and the Android app).
-func Skills() []Skill {
-	var out []Skill
-	off := skillpack.DisabledSet(skillsDir())
+type skillFile struct {
+	path, dir string
+	mtime     int64
+	body      string
+}
+
+func skillFiles() []skillFile {
+	var out []skillFile
 	ents, _ := os.ReadDir(skillsDir())
 	for _, en := range ents {
 		if !en.IsDir() || strings.HasPrefix(en.Name(), ".") {
 			continue
 		}
 		f := filepath.Join(skillsDir(), en.Name(), "SKILL.md")
-		b, err := os.ReadFile(f)
+		st, err := os.Stat(f)
+		if err != nil || st.IsDir() {
+			continue
+		}
+		out = append(out, skillFile{path: f, dir: en.Name(), mtime: st.ModTime().UnixNano()})
+	}
+	return out
+}
+
+// Skills lists ~/.blaze/skills/*/SKILL.md (same format as Desktop and the
+// Android app) and keeps the skills index in blaze.db in step with the folder.
+func Skills() []Skill {
+	var out []Skill
+	off := skillpack.DisabledSet(skillsDir())
+	files := skillFiles()
+	for i, f := range files {
+		b, err := os.ReadFile(f.path)
 		if err != nil {
 			continue
 		}
+		files[i].body = string(b)
 		m, _, _ := skillpack.ParseFront(string(b))
-		s := Skill{Name: en.Name(), Desc: m.Description, Path: f, Tags: m.Tags, Off: off[en.Name()]}
+		s := Skill{Name: f.dir, Desc: m.Description, Path: f.path, Tags: m.Tags, Off: off[f.dir]}
 		if m.Name != "" {
 			s.Name = m.Name
 		}
 		out = append(out, s)
 	}
+	if d := DB(); d != nil {
+		syncSkillIndex(d, files, out)
+	}
 	return out
+}
+
+// SyncSkillIndex re-indexes the skills folder into blaze.db when a SKILL.md was
+// added, changed or removed (the same check Desktop makes, so the two apps agree
+// and neither rebuilds the index for nothing).
+func SyncSkillIndex() { Skills() }
+
+func syncSkillIndex(d *store.DB, files []skillFile, sk []Skill) {
+	have := d.SkillMtimes()
+	changed := len(files) != len(have)
+	for _, f := range files {
+		if have[f.path] != f.mtime {
+			changed = true
+			break
+		}
+	}
+	if !changed {
+		return
+	}
+	rows := make([]store.Skill, 0, len(sk))
+	byPath := map[string]skillFile{}
+	for _, f := range files {
+		byPath[f.path] = f
+	}
+	for _, s := range sk {
+		f := byPath[s.Path]
+		rows = append(rows, store.Skill{Name: s.Name, Desc: s.Desc, Path: s.Path, Body: f.body, Mtime: f.mtime})
+	}
+	_ = d.ReplaceSkills(rows)
 }
 
 // SkillLimit is how many skills the prompt lists when there are more.
@@ -248,6 +273,21 @@ func PickSkills(query string, limit int) (pick []Skill, total int) {
 	}
 	if len(on) <= limit {
 		return on, len(on)
+	}
+	// Full-text search over the shared index first (name and description weigh
+	// most), topped up by the word ranking below.
+	seen := map[string]bool{}
+	if d := DB(); d != nil {
+		byPath := map[string]Skill{}
+		for _, s := range on {
+			byPath[s.Path] = s
+		}
+		for _, r := range d.SearchSkills(query, limit+4) {
+			if s, ok := byPath[r.Path]; ok && !seen[s.Path] && len(pick) < limit {
+				seen[s.Path] = true
+				pick = append(pick, s)
+			}
+		}
 	}
 	words := map[string]bool{}
 	for _, w := range norm(query) {
@@ -276,8 +316,11 @@ func PickSkills(query string, limit int) (pick []Skill, total int) {
 		all = append(all, sc{s, n})
 	}
 	sort.SliceStable(all, func(i, j int) bool { return all[i].n > all[j].n })
-	for i := 0; i < limit; i++ {
-		pick = append(pick, all[i].s)
+	for i := 0; i < len(all) && len(pick) < limit; i++ {
+		if !seen[all[i].s.Path] {
+			seen[all[i].s.Path] = true
+			pick = append(pick, all[i].s)
+		}
 	}
 	return pick, len(on)
 }
@@ -328,6 +371,9 @@ func init() {
 			if fact == "" {
 				return "Error in remember: write the fact."
 			}
+			if DB() == nil {
+				return memErr()
+			}
 			if id, ok := memID(a.s("replaces")); ok {
 				if err := ReplaceFact(id, fact); err == nil {
 					Learned(LearnEvent{Kind: "memory", Action: "replaced", Text: fact, Ref: fmt.Sprintf("#%d", id)})
@@ -359,6 +405,9 @@ func init() {
 	register("recall", "Search everything you've saved about the user. Use before asking the user something you may already know.",
 		[]prop{p("query", "string", "Words to look for")}, []string{"query"},
 		func(e *Env, a args) string {
+			if DB() == nil {
+				return memErr()
+			}
 			fs := SearchFacts(a.s("query"), 10)
 			if len(fs) == 0 {
 				return "No saved memory matches " + a.s("query") + "."
@@ -373,25 +422,23 @@ func init() {
 	register("forget", "Remove saved memories: by id (#3 from your prompt) or every memory containing some text.",
 		[]prop{p("text", "string", "A memory id like #3, or text to match")}, []string{"text"},
 		func(e *Env, a args) string {
-			fs := Facts()
-			var keep, gone []Fact
-			id, byID := memID(a.s("text"))
-			q := strings.ToLower(strings.TrimSpace(a.s("text")))
-			for _, f := range fs {
-				if (byID && f.ID == id) || (!byID && q != "" && strings.Contains(strings.ToLower(f.Text), q)) {
-					gone = append(gone, f)
-					continue
+			d := DB()
+			if d == nil {
+				return memErr()
+			}
+			var gone []store.Memory
+			if id, ok := memID(a.s("text")); ok {
+				if m, found := d.Memory(id); found && d.Delete(id) == nil {
+					gone = append(gone, m)
 				}
-				keep = append(keep, f)
+			} else {
+				gone = d.ForgetMatching(a.s("text"))
 			}
 			if len(gone) == 0 {
 				return "No saved memory matches " + a.s("text") + "."
 			}
-			if err := writeFacts(keep); err != nil {
-				return "Error: " + err.Error()
-			}
-			for _, f := range gone {
-				Learned(LearnEvent{Kind: "memory", Action: "forgot", Text: f.Text, Ref: fmt.Sprintf("#%d", f.ID)})
+			for _, m := range gone {
+				Learned(LearnEvent{Kind: "memory", Action: "forgot", Text: m.Text, Ref: fmt.Sprintf("#%d", m.ID)})
 			}
 			return fmt.Sprintf("Forgot %d fact(s).", len(gone))
 		})
