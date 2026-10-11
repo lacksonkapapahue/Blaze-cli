@@ -185,6 +185,7 @@ func (a *Agent) Ask(ctx context.Context, prompt string) (_ string, err error) {
 		maxSteps, deadline = tools.AutopilotSteps, started.Add(tools.AutopilotMinutes*time.Minute)
 	}
 	autoReplies := 0
+	lastPlain := "" // the last step's plain words, so the thinking line can say what comes next
 	for step := 0; step < maxSteps; step++ {
 		if !deadline.IsZero() && time.Now().After(deadline) {
 			return final, fmt.Errorf("Autopilot stopped after %d minutes (its time budget); say \"continue\" to keep going", tools.AutopilotMinutes)
@@ -193,7 +194,7 @@ func (a *Agent) Ask(ctx context.Context, prompt string) (_ string, err error) {
 		msgs := append([]llm.Message{{Role: "system", Content: a.system()}}, a.History...)
 		md := &ui.MD{}
 		if !a.Quiet {
-			a.spin.Start("thinking")
+			a.spin.Start(steps.Thinking(step, lastPlain))
 			opened := false
 			md.Pre = func() {
 				a.spin.Stop()
@@ -202,13 +203,13 @@ func (a *Agent) Ask(ctx context.Context, prompt string) (_ string, err error) {
 					opened = true
 				}
 			}
-			md.Post = func() { a.spin.Start("writing") }
+			md.Post = func() { a.spin.Start(steps.Writing) }
 		}
 		r, err := complete(ctx, a.Cfg, msgs, all, func(s string) {
 			if a.Quiet {
 				return
 			}
-			a.spin.Set("writing")
+			a.spin.Set(steps.Writing)
 			md.Write(s)
 		})
 		if !a.Quiet {
@@ -247,6 +248,7 @@ func (a *Agent) Ask(ctx context.Context, prompt string) (_ string, err error) {
 			// While working only plain words show (Blaze Desktop's phrases); the exact
 			// call, its output and any diff wait behind Ctrl+O.
 			plain := steps.Describe(tc.Function.Name, tc.Function.Arguments)
+			lastPlain = plain
 			if !a.Quiet {
 				a.spin.Start(plain)
 			}

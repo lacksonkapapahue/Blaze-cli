@@ -23,6 +23,7 @@ import (
 	"github.com/lacksonkapapahue/blaze-cli/internal/config"
 	"github.com/lacksonkapapahue/blaze-cli/internal/learn"
 	"github.com/lacksonkapapahue/blaze-cli/internal/llm"
+	"github.com/lacksonkapapahue/blaze-cli/internal/steps"
 	"github.com/lacksonkapapahue/blaze-cli/internal/tools"
 	"github.com/lacksonkapapahue/blaze-cli/internal/ui"
 )
@@ -233,7 +234,7 @@ func (a *Agent) Reflect(ctx context.Context) {
 			skills = append(skills, s.Name)
 		}
 	}
-	a.spin.Start("learning")
+	a.spin.Start(steps.Learning)
 	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	r, err := llm.Complete(cctx, a.Cfg, []llm.Message{{Role: "user", Content: learn.Prompt(t, dec, known, skills)}}, nil, nil)
 	cancel()

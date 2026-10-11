@@ -128,3 +128,26 @@ func TestWorkedLine(t *testing.T) {
 		}
 	}
 }
+
+func TestThinking(t *testing.T) {
+	cases := []struct {
+		step       int
+		last, want string
+	}{
+		{0, "", "Reading your request"},
+		{1, "Running the tests", "Checking the test results"},
+		{2, `Searching the web for "x"`, "Going through the search results"},
+		{1, "Reading main.go", "Going over main.go"},
+		{1, "Editing main.go", "Checking the change"},
+		{3, "Looking through the project folder", "Working out the next step"},
+	}
+	for _, c := range cases {
+		got := Thinking(c.step, c.last)
+		if got != c.want {
+			t.Errorf("Thinking(%d, %q) = %q, want %q", c.step, c.last, got, c.want)
+		}
+		if strings.Contains(strings.ToLower(got), "thinking") || !IsPlain(got) {
+			t.Errorf("Thinking(%d, %q) = %q is not plain words", c.step, c.last, got)
+		}
+	}
+}
