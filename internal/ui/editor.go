@@ -20,13 +20,14 @@ import (
 var ErrInterrupt = errors.New("interrupt")
 
 type Editor struct {
-	HistoryFile string                   // persisted history, one entry per line ("" = memory only)
-	Commands    []string                 // slash commands for Tab / ghost completion
-	Placeholder string                   // dim hint shown while the line is empty
-	Boxed       bool                     // draw the input inside a hairline box
-	Glyph       func(line string) string // prompt glyph for the current line (mode / shell)
-	Footer      func(line string) string // dim line under the box
-	OnShiftTab  func()                   // cycle modes
+	HistoryFile string                     // persisted history, one entry per line ("" = memory only)
+	Commands    []string                   // slash commands for Tab / ghost completion
+	Placeholder string                     // dim hint shown while the line is empty
+	Boxed       bool                       // draw the input inside a hairline box
+	Glyph       func(line string) string   // prompt glyph for the current line (mode / shell)
+	Footer      func(line string) string   // dim line under the box
+	OnShiftTab  func()                     // cycle modes
+	Menu        func(line string) *MenuSet // pop-up menu above the box for this line (nil = none)
 
 	history []string
 	loaded  bool
@@ -40,6 +41,11 @@ type Editor struct {
 	histIdx int
 	draft   []rune
 	keep    []rune // typed text kept across a wake
+
+	// pop-up menu state
+	menuIdx  int
+	menuLine string // the line the highlight belongs to
+	menuOff  string // Esc closed the menu for exactly this line
 }
 
 // StdinTTY is true when we can put the keyboard in raw mode.
@@ -129,6 +135,7 @@ func (e *Editor) Read(prompt string) (string, error) {
 		e.buf, e.pos, e.keep = e.keep, len(e.keep), nil
 	}
 	e.histIdx, e.draft = len(e.history), nil
+	e.menuIdx, e.menuLine, e.menuOff = 0, "", ""
 	activeEd = e
 	e.render(false)
 	edMu.Unlock()
@@ -167,6 +174,9 @@ func (e *Editor) key(r rune, err error) (string, bool, error) {
 	}
 	switch r {
 	case '\r', '\n':
+		if submit, ok := e.menuPick(true); ok && !submit {
+			break // filled in from the menu; Enter again (or keep typing)
+		}
 		out := string(e.buf)
 		e.render(true)
 		Printf("\r\n")
@@ -209,11 +219,19 @@ func (e *Editor) key(r rune, err error) (string, bool, error) {
 		Printf("\x1b[H\x1b[2J")
 		e.curRow = 0
 	case 16:
-		e.histPrev()
+		if !e.menuMove(-1) {
+			e.histPrev()
+			e.menuOff = string(e.buf) // a recalled line doesn't pop the menu
+		}
 	case 14:
-		e.histNext()
+		if !e.menuMove(1) {
+			e.histNext()
+			e.menuOff = string(e.buf) // a recalled line doesn't pop the menu
+		}
 	case 9:
-		e.tab()
+		if _, ok := e.menuPick(false); !ok {
+			e.tab()
+		}
 	case 27:
 		e.escape()
 	default:
@@ -360,6 +378,9 @@ func (e *Editor) ghost() string {
 	if e.pos != len(e.buf) || len(e.buf) == 0 {
 		return ""
 	}
+	if g, open := e.menuGhost(); open {
+		return g
+	}
 	s := string(e.buf)
 	if strings.HasPrefix(s, "/") && !strings.Contains(s, " ") {
 		if m := e.matches(); len(m) > 0 && m[0] != s {
@@ -419,7 +440,8 @@ func (e *Editor) tab() {
 
 func (e *Editor) escape() {
 	if In.Buffered() == 0 {
-		return // a lone Esc key
+		e.menuOff = string(e.buf) // a lone Esc key closes the menu
+		return
 	}
 	r, _, _ := In.ReadRune()
 	switch r {
@@ -450,9 +472,15 @@ func (e *Editor) escape() {
 func (e *Editor) csi(intro rune, seq string) {
 	switch seq {
 	case "A":
-		e.histPrev()
+		if !e.menuMove(-1) {
+			e.histPrev()
+			e.menuOff = string(e.buf) // a recalled line doesn't pop the menu
+		}
 	case "B":
-		e.histNext()
+		if !e.menuMove(1) {
+			e.histNext()
+			e.menuOff = string(e.buf) // a recalled line doesn't pop the menu
+		}
 	case "C":
 		e.right()
 	case "D":
@@ -629,6 +657,17 @@ func (e *Editor) render(final bool) {
 		fmt.Fprintf(&sb, "\x1b[%dA", e.curRow)
 	}
 	sb.WriteString("\r\x1b[J")
+	var menu []string
+	if !final {
+		mw := BW
+		if !boxed {
+			mw = min(W-3, 110)
+		}
+		menu = e.menuLines(mw)
+		for _, l := range menu {
+			sb.WriteString(l + "\r\n")
+		}
+	}
 	line := func(i int, r []cell) string {
 		var b strings.Builder
 		if i == 0 {
@@ -669,7 +708,7 @@ func (e *Editor) render(final bool) {
 		target := 1 + cr
 		fmt.Fprintf(&sb, "\x1b[%dA\r", total-1-target)
 		fmt.Fprintf(&sb, "\x1b[%dC", 4+pw+cc)
-		e.curRow = target
+		e.curRow = len(menu) + target
 	} else {
 		for i, r := range rows {
 			if i > 0 {
@@ -687,7 +726,7 @@ func (e *Editor) render(final bool) {
 			if c := pw + cc; c > 0 {
 				fmt.Fprintf(&sb, "\x1b[%dC", c)
 			}
-			e.curRow = cr
+			e.curRow = len(menu) + cr
 		}
 	}
 	Printf("%s", sb.String())
