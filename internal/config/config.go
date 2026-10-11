@@ -5,6 +5,9 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"reflect"
 	"os"
 	"path/filepath"
 	"strings"
@@ -57,7 +60,16 @@ type Config struct {
 	MaxSteps    int               `json:"max_steps"`
 	Persona     string            `json:"persona,omitempty"`
 	NoKeyless   bool              `json:"no_keyless,omitempty"` // don't fall back to the keyless model
-	path        string
+
+	// Shared with Blaze Desktop (v0.3+): the model the user picked last, in the
+	// desktop's keys. Default nil or provider "auto" = Auto (route over Chain).
+	Default  *Entry            `json:"default,omitempty"`
+	ModelFor map[string]string `json:"model_for,omitempty"` // chosen model per provider
+
+	// Session is a one-run override (--model); never saved.
+	Session *Entry `json:"-"`
+
+	path string
 }
 
 func Dir() string {
@@ -79,11 +91,17 @@ func Load() *Config {
 	return c
 }
 
+// Save writes config.json. Keys this build doesn't know (Blaze Desktop's routing
+// switches, custom provider, extra keys…) are kept as they were, so the CLI never
+// wipes the desktop's settings.
 func (c *Config) Save() error {
 	if err := os.MkdirAll(Dir(), 0o700); err != nil {
 		return err
 	}
-	b, _ := json.MarshalIndent(c, "", "  ")
+	b, err := mergeJSON(c.path, c)
+	if err != nil {
+		return err
+	}
 	return os.WriteFile(c.path, b, 0o600)
 }
 
@@ -135,9 +153,28 @@ func (c *Config) HasAnyModel() bool {
 // Keyless providers need no API key.
 func Keyless(id string) bool { return id == "ollama" || id == "pollinations" }
 
-// RouteChain is the chain plus the keyless last resort.
+// RouteChain is the order models are tried in: the --model override, then the
+// last-picked model (when it can run: it has a key or needs none), then the
+// chain, then the keyless last resort.
 func (c *Config) RouteChain() []Entry {
-	ch := append([]Entry(nil), c.Chain...)
+	var ch []Entry
+	seen := map[Entry]bool{}
+	add := func(e Entry) {
+		if e.Provider == "" || seen[e] {
+			return
+		}
+		seen[e] = true
+		ch = append(ch, e)
+	}
+	if c.Session != nil {
+		add(*c.Session)
+	}
+	if d, ok := c.Preferred(); ok && c.Usable(d.Provider) {
+		add(d)
+	}
+	for _, e := range c.Chain {
+		add(e)
+	}
 	if c.NoKeyless {
 		return ch
 	}
@@ -147,4 +184,160 @@ func (c *Config) RouteChain() []Entry {
 		}
 	}
 	return append(ch, Entry{Provider: "pollinations", Model: "openai-fast"})
+}
+
+// Auto is Default.Provider for automatic routing (the desktop's "auto").
+const Auto = "auto"
+
+// IsAuto reports whether no model was picked (route over the chain).
+func (c *Config) IsAuto() bool {
+	return c.Default == nil || c.Default.Provider == "" || c.Default.Provider == Auto
+}
+
+// Preferred is the last-picked model with its model filled in (ok=false on Auto).
+func (c *Config) Preferred() (Entry, bool) {
+	if c.IsAuto() {
+		return Entry{}, false
+	}
+	e := *c.Default
+	if e.Model == "" {
+		e.Model = c.Model(e.Provider)
+	}
+	return e, true
+}
+
+// Usable reports whether a provider can be called now: it has a key, or needs none.
+func (c *Config) Usable(provider string) bool {
+	if _, ok := ProviderByID(provider); !ok {
+		return false
+	}
+	return Keyless(provider) || c.Key(provider) != ""
+}
+
+// Model is the model Blaze uses for a provider: the user's pick, then its chain
+// entry, then the built-in default (same order as the desktop).
+func (c *Config) Model(provider string) string {
+	if m := c.ModelFor[provider]; m != "" {
+		return m
+	}
+	for _, e := range c.Chain {
+		if e.Provider == provider && e.Model != "" {
+			return e.Model
+		}
+	}
+	if p, ok := ProviderByID(provider); ok {
+		return p.DefaultModel
+	}
+	return ""
+}
+
+// SetModelFor remembers the model picked for a provider.
+func (c *Config) SetModelFor(provider, model string) {
+	if c.ModelFor == nil {
+		c.ModelFor = map[string]string{}
+	}
+	c.ModelFor[provider] = model
+}
+
+// SelectModel makes provider/model the model Blaze starts on, here and in Blaze
+// Desktop (config.json "default" + "model_for"), and saves it. provider "auto" (or
+// "") goes back to automatic routing. An empty model keeps the provider's current one.
+func (c *Config) SelectModel(provider, model string) error {
+	provider = strings.TrimSpace(provider)
+	if provider == "" || provider == Auto {
+		c.Default = nil
+		return c.Save()
+	}
+	if _, ok := ProviderByID(provider); !ok {
+		return fmt.Errorf("no provider called %q (try one of: %s)", provider, strings.Join(ProviderIDs(), ", "))
+	}
+	if provider == "pollinations" {
+		return errors.New("Pollinations can't use tools, so it can't be the main model; it only answers plain chat when nothing else is set up")
+	}
+	if model == "" {
+		model = c.Model(provider)
+	}
+	c.Default = &Entry{Provider: provider, Model: model}
+	if model != "" {
+		c.SetModelFor(provider, model)
+	}
+	for i, e := range c.Chain {
+		if e.Provider == provider {
+			c.Chain[i].Model = model
+		}
+	}
+	return c.Save()
+}
+
+// ProviderIDs lists every provider id.
+func ProviderIDs() []string {
+	var out []string
+	for _, p := range Providers {
+		out = append(out, p.ID)
+	}
+	return out
+}
+
+// Fallback explains why the last-picked model can't start this session ("" = it
+// can, or none was picked): "no API key" today; quota is noticed per turn.
+func (c *Config) Fallback() string {
+	d, ok := c.Preferred()
+	if !ok {
+		return ""
+	}
+	if _, known := ProviderByID(d.Provider); !known {
+		return d.Provider + " isn't a provider this Blaze knows"
+	}
+	if !c.Usable(d.Provider) {
+		return "it has no API key here"
+	}
+	return ""
+}
+
+// mergeJSON marshals v over the JSON object already in path: v's fields replace
+// theirs (an omitted empty field removes the old value), unknown keys stay.
+func mergeJSON(path string, v any) ([]byte, error) {
+	old := map[string]json.RawMessage{}
+	if b, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(b, &old)
+	}
+	for _, k := range jsonKeys(v) {
+		delete(old, k)
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	cur := map[string]json.RawMessage{}
+	if err := json.Unmarshal(b, &cur); err != nil {
+		return nil, err
+	}
+	for k, x := range cur {
+		old[k] = x
+	}
+	return json.MarshalIndent(old, "", "  ")
+}
+
+// jsonKeys are the JSON names of a struct's exported, serialised fields.
+func jsonKeys(v any) []string {
+	t := reflect.TypeOf(v)
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	var out []string
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+		if name == "-" {
+			continue
+		}
+		if name == "" {
+			name = f.Name
+		}
+		out = append(out, name)
+	}
+	return out
 }
