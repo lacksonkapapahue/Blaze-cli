@@ -145,6 +145,7 @@ func (e *Editor) Read(prompt string) (string, error) {
 			activeEd = nil
 		}
 		edMu.Unlock()
+		touchActivity() // what follows the prompt prints over an expanded Ctrl+O view
 	}()
 
 	for {
@@ -218,6 +219,10 @@ func (e *Editor) key(r rune, err error) (string, bool, error) {
 	case 12:
 		Printf("\x1b[H\x1b[2J")
 		e.curRow = 0
+		touchActivity()
+	case 15: // Ctrl+O: expand / collapse the last turn's details (activity.go)
+		e.clear()
+		toggleActivity()
 	case 16:
 		if !e.menuMove(-1) {
 			e.histPrev()
@@ -819,6 +824,7 @@ func clip(s string, n int) string {
 // Keys are reported as names: "up", "down", "left", "right", "enter", "space",
 // "tab", "esc", "ctrl-c", or the typed character.
 func rawKeys(fn func(key string) bool) bool {
+	defer holdKeys()() // mid-turn: take the keyboard from the composer (typeahead.go)
 	fd := int(os.Stdin.Fd())
 	old, err := term.MakeRaw(fd)
 	if err != nil {

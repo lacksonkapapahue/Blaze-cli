@@ -26,7 +26,7 @@ func quiet() (func(), bool) {
 		return func() {}, false
 	}
 	t := *old
-	t.Lflag &^= unix.ECHO | unix.ICANON
+	t.Lflag &^= unix.ECHO | unix.ICANON | unix.IEXTEN // IEXTEN off: Ctrl+O is not "discard output" (macOS), Ctrl+V not "literal next"
 	t.Cc[unix.VMIN], t.Cc[unix.VTIME] = 1, 0
 	if unix.IoctlSetTermios(fd, ioctlSet, &t) != nil {
 		return func() {}, false

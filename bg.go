@@ -1,6 +1,8 @@
 package main
 
-// Background agents in the terminal (parity with Blaze Desktop v0.5.0). The engine
+// Background agents and specialists in the terminal (parity with Blaze Desktop
+// v0.6.0: the main chat is a lead that briefs specialists, each in its own git
+// worktree or folder copy, and reviews their changes before applying them). The engine
 // is internal/agents; this file wires it to the CLI: the model router, the tools and
 // the approval gate, and the prompt. A sub-agent never draws over the prompt: its
 // approvals and questions wait in a queue and the prompt is woken (ui.Wake) so the
@@ -22,11 +24,15 @@ import (
 	"github.com/lacksonkapapahue/blaze-cli/internal/config"
 	"github.com/lacksonkapapahue/blaze-cli/internal/llm"
 	"github.com/lacksonkapapahue/blaze-cli/internal/notify"
+	"github.com/lacksonkapapahue/blaze-cli/internal/steps"
 	"github.com/lacksonkapapahue/blaze-cli/internal/tools"
 	"github.com/lacksonkapapahue/blaze-cli/internal/ui"
 )
 
 func agentsDir() string { return filepath.Join(config.Dir(), "cli", "agents") }
+
+// worktreesDir is where Build specialists get their own worktree or folder copy.
+func worktreesDir() string { return filepath.Join(config.Dir(), "cli", "worktrees") }
 
 // resumeMarker is written before /update restarts Blaze while agents run.
 func resumeMarker() string { return filepath.Join(config.Dir(), "cli", "resume-after-update") }
@@ -49,18 +55,19 @@ type bgAgents struct {
 	m    *agents.Manager
 	conv string
 
-	mu      sync.Mutex
-	envs    map[string]*tools.Env
-	ctxs    map[string]context.Context
-	results []agents.View
-	asks    []*ask
+	mu         sync.Mutex
+	dispatched int // agents the main chat started this step (handoff)
+	envs       map[string]*tools.Env
+	ctxs       map[string]context.Context
+	results    []agents.View
+	asks       []*ask
 }
 
 func newBG(a *agent.Agent) *bgAgents {
 	b := &bgAgents{main: a, conv: "cli:" + a.Env.Root, envs: map[string]*tools.Env{}, ctxs: map[string]context.Context{}}
-	steps := a.Cfg.MaxSteps
-	if steps < 40 {
-		steps = 40
+	maxSteps := a.Cfg.MaxSteps
+	if maxSteps < 40 {
+		maxSteps = 40
 	}
 	n := agents.DefaultCap
 	if a.Env.Info != nil && a.Env.Info.Cores > 0 && a.Env.Info.Cores <= 2 {
@@ -73,16 +80,18 @@ func newBG(a *agent.Agent) *bgAgents {
 		Tools: b.tools,
 		Known: func() []string {
 			var names []string
-			for _, t := range b.tools(nil) {
+			for _, t := range b.tools(&agents.Agent{}) {
 				names = append(names, t.Function.Name)
 			}
 			return names
 		},
 		Exec:     b.exec,
-		System:   func(ag *agents.Agent) string { return a.SystemPrompt() + agents.SubSystem(ag.Handle) },
-		Describe: describeCall,
-		MaxSteps: steps,
+		System:   func(ag *agents.Agent) string { return a.SystemPrompt() + agents.AgentSystem(ag) },
+		Describe: steps.Describe, // plain words on the agent's row, never the command
+		MaxSteps: maxSteps,
+		Guard:    b.guard,
 	}, agentsDir(), n)
+	b.m.SetIsolationDir(worktreesDir())
 	b.m.OnChange = func(agents.View) { ui.Refresh() }
 	b.m.OnResult = func(v agents.View) {
 		b.mu.Lock()
@@ -94,7 +103,7 @@ func newBG(a *agent.Agent) *bgAgents {
 		if v.Status != agents.Done {
 			mark, word = ui.Ink("■ "), v.Status
 		}
-		ui.Above("  " + mark + ui.Ink("agent "+v.Handle+" "+word) + ui.Weak(fmt.Sprintf(" · %d steps · %.0fs", v.N, v.Seconds)))
+		ui.Above("  " + mark + ui.Ink(kindWord(v.Kind)+" "+v.Handle+" "+word) + ui.Weak(fmt.Sprintf(" · %d steps · %.0fs", v.N, v.Seconds)))
 		if !ui.Focused() {
 			body := clipText(v.Result, 200)
 			if v.Status != agents.Done {
@@ -110,13 +119,113 @@ func newBG(a *agent.Agent) *bgAgents {
 	return b
 }
 
+// lead runs one of the main chat's agent tools: background agents and specialists.
+// Specialists inherit the lead's folder, mode and step budget (never more).
+func (b *bgAgents) lead(name, args string) string {
+	mode, max := "build", b.main.Cfg.MaxSteps
+	if b.main.Env.Plan {
+		mode = "plan"
+	}
+	if b.main.Autopilot() {
+		max = tools.AutopilotSteps
+	}
+	if max < 40 {
+		max = 40
+	}
+	if name == "apply_specialist" && mode == "plan" && strings.Contains(args, "apply") {
+		return "Plan mode is on: applying a specialist's changes waits for Build. Tell the user what it changed and that switching to Build (shift+tab) lets you apply it."
+	}
+	out := b.m.HandleLeadTool(name, args, agents.Lead{Conv: b.conv, Folder: b.main.Env.Shell.Cwd(), Mode: mode, MaxSteps: max})
+	if out.Dispatched != "" {
+		b.mu.Lock()
+		b.dispatched++
+		b.mu.Unlock()
+	}
+	return out.Result
+}
+
+// handoff ends the main turn at once when a step only briefed agents and started at
+// least one: the main chat stays free to talk while they work (Blaze Desktop's rule).
+func (b *bgAgents) handoff(calls []llm.ToolCall) bool {
+	b.mu.Lock()
+	n := b.dispatched
+	b.dispatched = 0
+	b.mu.Unlock()
+	return handedOff(calls, n)
+}
+
+func handedOff(calls []llm.ToolCall, dispatched int) bool {
+	if dispatched == 0 || len(calls) == 0 {
+		return false
+	}
+	for _, c := range calls {
+		if !agents.IsMainTool(c.Function.Name) {
+			return false
+		}
+	}
+	return true
+}
+
+// word is "agent" or "specialist" for a handle.
+func (b *bgAgents) word(handle string) string {
+	v, _ := b.m.Get(handle)
+	return kindWord(v.Kind)
+}
+
+// kindWord names an agent in messages: "agent" or "specialist".
+func kindWord(kind string) string {
+	if kind == agents.Specialist {
+		return "specialist"
+	}
+	return "agent"
+}
+
+// plan is true when an agent may only read and scout: a Plan specialist, or any agent
+// while the lead (the main chat) is in Plan mode. An agent never has more permissions
+// than the lead.
+func (b *bgAgents) plan(ag *agents.Agent) bool { return ag.Mode == "plan" || b.main.Env.Plan }
+
+// guard stops a specialist at the lead's Autopilot time budget (it inherits the
+// lead's limits; its step budget comes from the dispatch).
+func (b *bgAgents) guard(ag *agents.Agent) string {
+	if ag.Kind == agents.Specialist && b.main.Autopilot() && !ag.Started.IsZero() && time.Since(ag.Started) > tools.AutopilotMinutes*time.Minute {
+		return fmt.Sprintf("stopped at Autopilot's time budget (%d min)", tools.AutopilotMinutes)
+	}
+	return ""
+}
+
+// block is why an agent's tool call is refused ("" = allowed): a Build specialist
+// with its own copy writing into the original folder.
+func (b *bgAgents) block(ag *agents.Agent, name, rawArgs string) string {
+	if ag.Iso == nil || !writesFiles[name] {
+		return ""
+	}
+	var args map[string]any
+	_ = json.Unmarshal([]byte(rawArgs), &args)
+	p, _ := args["path"].(string)
+	if p != "" && filepath.IsAbs(p) && insideDir(ag.Iso.OriginalWorkdir(), p) && !insideDir(ag.Iso.Path, p) {
+		return "Refused: " + p + " is in the original folder. Work only in your own copy, " + ag.Iso.Workdir() + " (the same relative path there); the lead applies your changes after review."
+	}
+	return ""
+}
+
+// writesFiles are the file tools a specialist could aim at the original folder.
+var writesFiles = map[string]bool{"file_write": true, "file_edit": true, "file_delete": true}
+
+func insideDir(dir, p string) bool {
+	rel, err := filepath.Rel(filepath.Clean(dir), filepath.Clean(p))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 // tools is a sub-agent's tool list: everything the main agent has except the
-// agent-control tools and update_blaze, plus ask_user, narrowed to the scope.
-func (b *bgAgents) tools(scope []string) []llm.Tool {
+// agent-control tools and update_blaze, plus ask_user, narrowed to its scope;
+// read-only for a Plan specialist or while the lead is in Plan.
+func (b *bgAgents) tools(ag *agents.Agent) []llm.Tool {
+	scope := ag.Scope
 	all := tools.All()
 	all = append(all, notifyTool())
 	all = append(all, getConns().Tools()...)
-	if b.main.Env.Plan {
+	if b.plan(ag) {
 		var ro []llm.Tool
 		for _, t := range all {
 			if tools.PlanAllows(t.Function.Name) || getConns().ReadOnly(t.Function.Name) {
@@ -147,7 +256,7 @@ func (b *bgAgents) env(ag *agents.Agent) *tools.Env {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if e := b.envs[ag.Handle]; e != nil {
-		e.Plan = b.main.Env.Plan
+		e.Plan = b.plan(ag)
 		return e
 	}
 	root := ag.Folder
@@ -156,9 +265,13 @@ func (b *bgAgents) env(ag *agents.Agent) *tools.Env {
 	}
 	h := ag.Handle
 	mainEnv := b.main.Env
-	e := &tools.Env{Info: mainEnv.Info, Root: root, Plan: mainEnv.Plan, Shell: tools.NewShell(mainEnv.Info.Shell, mainEnv.Info.ShellPath, root), Jobs: mainEnv.Jobs}
+	e := &tools.Env{Info: mainEnv.Info, Root: root, Plan: b.plan(ag), Shell: tools.NewShell(mainEnv.Info.Shell, mainEnv.Info.ShellPath, root), Jobs: mainEnv.Jobs}
 	e.Confirm = func(title, detail string) bool { return b.gate(h, title, detail) }
-	e.Status = func(s string) { b.m.Status(h, s) }
+	e.Status = func(s string) {
+		if p := steps.PlainStatus(s); p != "" {
+			b.m.Status(h, p) // plain words only on its row
+		}
+	}
 	b.envs[h] = e
 	return e
 }
@@ -171,10 +284,13 @@ func (b *bgAgents) exec(ctx context.Context, ag *agents.Agent, name, args string
 		return b.question(ctx, ag.Handle, args)
 	}
 	if agents.IsMainTool(name) || name == "update_blaze" {
-		return "Error: background agents can't start or steer other agents or update Blaze. Do the work yourself."
+		return "Error: background agents and specialists can't start or steer other agents or update Blaze. Do the work yourself."
 	}
-	if b.main.Env.Plan && !(tools.PlanAllows(name) || getConns().ReadOnly(name)) {
+	if b.plan(ag) && !(tools.PlanAllows(name) || getConns().ReadOnly(name)) {
 		return agent.PlanRefusal
+	}
+	if why := b.block(ag, name, args); why != "" {
+		return why
 	}
 	if name == "notify" {
 		return runNotify(args)
@@ -262,7 +378,7 @@ func (b *bgAgents) wait(ctx context.Context, q *ask) string {
 	if q.question {
 		what = "has a question"
 	}
-	ui.Above("  " + ui.Accent("? ") + ui.Ink("agent "+q.handle+" "+what))
+	ui.Above("  " + ui.Accent("? ") + ui.Ink(b.word(q.handle)+" "+q.handle+" "+what))
 	if !ui.Focused() {
 		_, _ = notify.Send(notify.Note{Title: "Blaze · " + q.handle + " " + what, Body: q.title, Kind: "task", Urgency: "critical"})
 	}
@@ -303,7 +419,7 @@ func (b *bgAgents) drainAsks() {
 		b.mu.Unlock()
 		ui.Println("")
 		if q.question {
-			ui.Box(ui.AccentLabel("agent "+q.handle+" asks"), []string{ui.Ink(q.title)})
+			ui.Box(ui.AccentLabel(b.word(q.handle)+" "+q.handle+" asks"), []string{ui.Ink(q.title)})
 			if len(q.choices) > 0 {
 				i := ui.Choose("  "+ui.Accent("?")+" ", q.choices, 0, -1)
 				if i >= 0 && i < len(q.choices) {
@@ -315,7 +431,7 @@ func (b *bgAgents) drainAsks() {
 			q.reply <- strings.TrimSpace(ans)
 			continue
 		}
-		ui.Box(ui.AccentLabel("agent "+q.handle+" · "+q.title), []string{ui.Ink(q.detail)})
+		ui.Box(ui.AccentLabel(b.word(q.handle)+" "+q.handle+" · "+q.title), []string{ui.Ink(q.detail)})
 		opts := []string{"Yes", "No"}
 		if q.always {
 			opts = []string{"Yes", "Always allow", "No"}
@@ -453,6 +569,19 @@ func (b *bgAgents) command(f []string) {
 		if h, st, err = b.m.Dispatch(f[1], strings.Join(f[2:], " "), nil, b.conv, b.main.Env.Shell.Cwd()); err == nil {
 			ui.StepDone(true, "Agent "+h+" "+st, "its result comes back here", 0)
 		}
+	case "apply", "reject":
+		if !need(2, f[0]+" <specialist>") {
+			return
+		}
+		action := map[string]string{"apply": "apply", "reject": "discard"}[f[0]]
+		if action == "apply" && b.main.Env.Plan {
+			ui.Step("Plan mode is on: switch to Build (shift+tab) to apply changes.")
+			return
+		}
+		var msg string
+		if msg, err = b.m.ApplySpecialist(f[1], action); err == nil {
+			ui.StepDone(true, msg, "", 0)
+		}
 	case "cap":
 		if !need(2, "cap <1-6>") {
 			return
@@ -487,6 +616,12 @@ func (b *bgAgents) list() {
 			mark = ui.Ink("■ ")
 		}
 		line := mark + ui.Ink(fmt.Sprintf("%-18s", v.Handle)) + ui.Sub(fmt.Sprintf(" %-11s %3d steps %5.0fs", v.Status, v.N, v.Seconds))
+		if v.Kind == agents.Specialist {
+			line += ui.Weak("  specialist · " + v.Mode)
+			if v.Review == "pending" {
+				line += ui.Accent(fmt.Sprintf(" · %d file(s) to review", len(v.Changes)))
+			}
+		}
 		if agents.Active(v.Status) && v.Now != "" {
 			line += ui.Weak("  " + clipText(v.Now, 40))
 		}
@@ -494,7 +629,7 @@ func (b *bgAgents) list() {
 	}
 	r, q := b.m.Running()
 	ui.Box(ui.AccentLabel(fmt.Sprintf("agents · %d running · %d queued · cap %d", r, q, b.m.Cap())), rows)
-	ui.Println("  " + ui.Weak("/agents <name> details · msg <name> <text> · cancel · resume · discard · new <name> <task>"))
+	ui.Println("  " + ui.Weak("/agents <name> details · msg <name> <text> · cancel · resume · discard · new <name> <task> · apply|reject <specialist>"))
 }
 
 func (b *bgAgents) show(handle string) {
@@ -520,19 +655,22 @@ func (b *bgAgents) show(handle string) {
 	if v.Error != "" {
 		rows = append(rows, ui.Ink("error: "+clipText(v.Error, 200)))
 	}
-	ui.Box(ui.AccentLabel("agent "+v.Handle), rows)
+	if v.Kind == agents.Specialist {
+		rows = append(rows, ui.Sub("specialist: ")+ui.Ink(v.Mode)+ui.Sub(" · works in ")+ui.Ink(nonEmptyStr(v.Path, v.Workdir)))
+		if v.Plan != "" {
+			rows = append(rows, ui.Sub("plan: ")+ui.Ink(clipText(v.Plan, 160)))
+		}
+		if v.Review != "" {
+			rows = append(rows, ui.Sub("review: ")+ui.Ink(v.Review)+ui.Sub(fmt.Sprintf(" · %d file(s) changed", len(v.Changes))))
+		}
+	}
+	ui.Box(ui.AccentLabel(kindWord(v.Kind)+" "+v.Handle), rows)
 	if v.Result != "" {
 		ui.Println("")
 		md := &ui.MD{}
 		md.Write(v.Result + "\n")
 		md.Flush()
 	}
-}
-
-func describeCall(name, args string) string {
-	var tc llm.ToolCall
-	tc.Function.Name, tc.Function.Arguments = name, args
-	return agent.Describe(tc)
 }
 
 func clipText(s string, n int) string {

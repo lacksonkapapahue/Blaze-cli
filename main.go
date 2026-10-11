@@ -271,6 +271,9 @@ func repl(a *agent.Agent, bg *bgAgents, in sysinfo.Info, cont bool) {
 		case a.Autopilot():
 			return "  " + ui.Accent("⏵⏵ build · autopilot") + ui.Weak(" · nothing asks (shift+tab)") + tail
 		}
+		if act := ui.LastActivity(); act != nil && len(act.Steps) > 0 {
+			tail = ui.Weak(" · ctrl+o steps") + tail
+		}
 		return "  " + ui.Weak("build · auto · ? /help · @ files · ! shell · # remember · shift+tab modes") + tail
 	}
 
@@ -296,7 +299,9 @@ func repl(a *agent.Agent, bg *bgAgents, in sysinfo.Info, cont bool) {
 		cancel = c
 		mu.Unlock()
 		restore := ui.Quiet()
+		ui.StartTypeahead() // the composer stays open: type and queue while Blaze works
 		_, err := a.Ask(ctx, prompt)
+		ed.Keep(ui.StopTypeahead())
 		restore()
 		mu.Lock()
 		cancel = nil
@@ -332,14 +337,13 @@ func repl(a *agent.Agent, bg *bgAgents, in sysinfo.Info, cont bool) {
 	}
 
 	// wake runs what background agents left for the main loop: their approvals and
-	// questions first, then each finished agent's result as its own turn.
+	// questions first, then one finished agent's result as its own turn (messages
+	// typed meanwhile go first; see the loop).
 	wake := func() {
-		for bg.pending() {
-			bg.drainAsks()
-			if v, ok := bg.nextResult(); ok {
-				ui.Println("\n  " + ui.Accent("▸ ") + ui.Ink("agent "+v.Handle+" "+v.Status) + ui.Weak(" · Blaze reads its report"))
-				run(agents.ResultMessage(v))
-			}
+		bg.drainAsks()
+		if v, ok := bg.nextResult(); ok {
+			ui.Println("\n  " + ui.Accent("▸ ") + ui.Ink(kindWord(v.Kind)+" "+v.Handle+" "+v.Status) + ui.Weak(" · Blaze reads its report"))
+			run(agents.ResultMessage(v))
 		}
 	}
 	lastIdle := time.Time{}
@@ -348,9 +352,20 @@ func repl(a *agent.Agent, bg *bgAgents, in sysinfo.Info, cont bool) {
 			restartNow(a, bg)
 			return
 		}
-		line, err := ed.Read(ui.Prompt())
-		if errors.Is(err, ui.ErrWake) {
+		// Like Blaze Desktop's composer, a message typed while Blaze worked waits its
+		// turn: queued messages run first, in order, then agents' results and asks.
+		var line string
+		var err error
+		if q, ok := ui.NextQueued(); ok {
+			line = q
+			ui.Println("\n" + ui.Accent("›") + " " + ui.Ink(q) + ui.Weak("  · sent while Blaze worked"))
+		} else if bg.pending() {
 			wake()
+			continue
+		} else {
+			line, err = ed.Read(ui.Prompt())
+		}
+		if errors.Is(err, ui.ErrWake) {
 			continue
 		}
 		if errors.Is(err, ui.ErrInterrupt) {
@@ -516,6 +531,8 @@ func help() {
 		ui.Ink("↑ ↓") + ui.Sub("           history   ") + ui.Ink("→ / tab") + ui.Sub(" accept suggestion"),
 		ui.Ink("ctrl+← →") + ui.Sub("      jump words   ") + ui.Ink("ctrl+w/u/k") + ui.Sub(" cut   ") + ui.Ink("ctrl+l") + ui.Sub(" clear"),
 		ui.Ink("ctrl+c") + ui.Sub("        stop a task · twice on an empty line quits"),
+		ui.Ink("ctrl+o") + ui.Sub("        show / hide the last answer's steps (commands, output, diffs)"),
+		ui.Ink("typing") + ui.Sub("        works while Blaze is busy: enter queues the message for its next turn"),
 	})
 }
 

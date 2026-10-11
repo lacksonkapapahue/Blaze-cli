@@ -2,6 +2,7 @@ package agents
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -98,5 +99,15 @@ func ResultMessage(v View) string {
 		}
 	}
 	b.WriteString("\n</agent_result>")
+	if v.Kind == Specialist {
+		b.WriteString("\nThis was your specialist " + strconv.Quote(v.Handle) + " (" + v.Mode + ").")
+		switch {
+		case v.Review == "pending":
+			fmt.Fprintf(&b, " It changed %d file(s) in its isolated copy: %s. Review them (check_specialist with diff: true), then apply_specialist apply or discard. Nothing has reached the user's folder yet.", len(v.Changes), changeList(v.Changes, 15))
+		case v.Review == "none":
+			b.WriteString(" It changed no files.")
+		}
+		b.WriteString(" If other specialists are still running, end your turn with at most one short progress line; summarise for the user when the last one is in.")
+	}
 	return b.String()
 }

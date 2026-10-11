@@ -20,7 +20,7 @@ func tool(name, desc string, props map[string]any, required ...string) llm.Tool 
 func str(desc string) map[string]any { return map[string]any{"type": "string", "description": desc} }
 
 // MainToolNames are the tools only the main agent has.
-var MainToolNames = []string{"dispatch_agent", "message_agent", "cancel_agent", "list_agents"}
+var MainToolNames = append([]string{"dispatch_agent", "message_agent", "cancel_agent", "list_agents"}, SpecToolNames...)
 
 // IsMainTool reports whether name is one of the agent-control tools.
 func IsMainTool(name string) bool {
@@ -34,7 +34,7 @@ func IsMainTool(name string) bool {
 
 // MainTools are the main agent's tools for running background agents.
 func MainTools() []llm.Tool {
-	return []llm.Tool{
+	return append([]llm.Tool{
 		tool("dispatch_agent", "Hand a task to a background agent and return at once. The agent works on its own (same tools and approvals as you) while the user keeps chatting; its result comes back to you as a platform message. Use for long, multi-step or parallel work. Put a short line for the user in the same reply (e.g. \"On it, I'll report back.\").",
 			map[string]any{
 				"handle": str("Short lowercase name for this agent, e.g. fix-tests or research-laptops. One agent per independent target."),
@@ -46,7 +46,7 @@ func MainTools() []llm.Tool {
 		tool("cancel_agent", "Stop a background agent (running or queued).",
 			map[string]any{"handle": str("The agent's handle.")}, "handle"),
 		tool("list_agents", "List this chat's background agents with their status and current step.", map[string]any{}),
-	}
+	}, SpecTools()...)
 }
 
 // AskTool lets a sub-agent ask the user a question (shown on its card).

@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.7.0 — Specialists, an always-open prompt and plain-words progress
+
+- **The main chat is always reachable.** The prompt no longer disappears while Blaze works: type on the working line
+  (`› your words▏`) and Enter queues the message; queued messages run right after the turn, in order, before agents'
+  results (Blaze Desktop's composer behaviour). Half-typed text comes back in the prompt. Approvals and questions that open
+  mid-turn take the keyboard while they are open and hand it back. Ctrl-C still stops the turn. (Linux/macOS; on Windows
+  consoles keys typed meanwhile still wait for the prompt.)
+- **Specialists (port of Blaze Desktop v0.6.0).** The main model works as a lead and stays light: it talks and steers, and
+  hands real work to background agents or, for a task with independent parts, briefs **specialists** with
+  `dispatch_specialist` / `check_specialist` / `message_specialist` / `cancel_specialist` / `apply_specialist`. They run in
+  parallel under the agents' cap; a Build specialist works in its own git worktree (or folder copy) in
+  `~/.blaze/cli/worktrees/` and can't write into your folder; the lead reviews its diff and applies or discards it. A
+  specialist never gets more than the lead: Plan lead → Plan specialists, Autopilot's time budget, the lead's step budget.
+  `internal/agents` now matches Desktop's package (specialists, isolation, result messages).
+- **Handing off ends the turn at once.** A step that only briefs agents ends the main turn with one short line, so the prompt
+  is yours again while they work. The lead's prompt adds Desktop's delegation and orchestration rules plus "you are the main
+  chat, keep your turns short".
+- **Plain words while working, details on Ctrl+O.** The working line says what Blaze is doing in Desktop's phrases
+  ("Reading main.go", "Running the tests", "Searching the web for …", "Briefing a specialist") — never tool names, commands,
+  JSON, code or diffs (new `internal/steps`, a port of Desktop's `steps.js`). Agents' and specialists' rows use the same
+  phrases. A finished turn folds into one dim line, `Worked · 5 steps · 12s · ctrl+o to expand`; **Ctrl+O** at the prompt
+  expands the last steps (exact commands, output, diffs) above the prompt and collapses them again without touching what
+  you're typing. While working the terminal's IEXTEN is off, so macOS doesn't treat Ctrl+O as "discard output".
+  `BLAZE_STEPS=all` prints a plain line per finished step. In /help and the footer.
+- `/agents` shows specialists (mode, files to review); `/agents apply|reject NAME` reviews one yourself.
+- Tests: Desktop's specialist suite (worktree/copy isolation, apply, parallel branches, conflicts, lifecycle, never above the
+  lead, guard), lead → specialist → apply end to end with a fake model (one model call at the handoff, nothing reaches the
+  folder before review), handoff rules, specialist permissions, the describer (tool call → phrase, never leaks commands),
+  the composer queue and keyboard hand-over, and the Ctrl+O toggle.
+
 ## v0.6.3 — Keys shared with Blaze Desktop and your phone
 
 - **One key store for Blaze CLI and Blaze Desktop** (`internal/keystore`, the same file in both repos): the OS keychain

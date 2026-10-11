@@ -50,8 +50,9 @@ const MaxCap = 6
 type Runtime struct {
 	// Complete is one model call (the router, budget and fallbacks live behind it).
 	Complete func(ctx context.Context, msgs []llm.Message, tools []llm.Tool) (*llm.Result, error)
-	// Tools lists the tools an agent may call, narrowed by its scope (nil = all).
-	Tools func(scope []string) []llm.Tool
+	// Tools lists the tools an agent may call this step: narrowed by a.Scope when set,
+	// otherwise the core set plus what the agent turned on with find_tools.
+	Tools func(a *Agent) []llm.Tool
 	// Known lists every tool name the gatekeeper should accept.
 	Known func() []string
 	// Exec runs one tool call for an agent. It may block on the user (approvals).
@@ -60,8 +61,12 @@ type Runtime struct {
 	System func(a *Agent) string
 	// Describe is the plain step wording ("Reading package.json").
 	Describe func(name, args string) string
-	// MaxSteps per run (default 40).
+	// MaxSteps per run (default 40). An agent's own MaxSteps (a specialist inherits the
+	// lead's budget) wins when set.
 	MaxSteps int
+	// Guard is checked before every model call: a non-empty reason stops the agent
+	// (the daily spend cap, Autopilot's time budget). Optional.
+	Guard func(a *Agent) string
 }
 
 // Step is one tool call in an agent's log.
@@ -95,6 +100,16 @@ type Agent struct {
 	Ended   time.Time     `json:"ended,omitempty"`
 	Runs    int           `json:"runs"` // 1 + times resumed
 
+	// Specialists (v0.6.0): an agent the lead briefed for one piece of a bigger task.
+	Kind     string     `json:"kind,omitempty"`      // "" (background agent) | specialist
+	Mode     string     `json:"mode,omitempty"`      // plan | build (never more than the lead had)
+	Workdir  string     `json:"workdir,omitempty"`   // the folder the lead asked for (original)
+	Iso      *Isolation `json:"iso,omitempty"`       // its own worktree / copy (Build + workdir)
+	Plan     string     `json:"plan,omitempty"`      // its short plan (first reply)
+	Review   string     `json:"review,omitempty"`    // "" | pending | applied | discarded | none
+	Changes  []Change   `json:"changes,omitempty"`   // what it changed in its copy
+	MaxSteps int        `json:"max_steps,omitempty"` // the lead's step budget at dispatch
+
 	inbox  []string
 	cancel context.CancelFunc
 	gen    int // bumps on every start, so a stale goroutine never writes over a resumed run
@@ -115,12 +130,23 @@ type View struct {
 	Ended   int64   `json:"ended"`
 	Seconds float64 `json:"seconds"`
 	Queue   int     `json:"queue,omitempty"` // place in the queue (1 = next)
+
+	Kind    string   `json:"kind,omitempty"`
+	Mode    string   `json:"mode,omitempty"`
+	Workdir string   `json:"workdir,omitempty"`
+	Iso     string   `json:"iso,omitempty"`    // worktree | copy
+	Branch  string   `json:"branch,omitempty"` // worktree branch
+	Path    string   `json:"path,omitempty"`   // the isolated folder it works in
+	Plan    string   `json:"plan,omitempty"`
+	Review  string   `json:"review,omitempty"`
+	Changes []Change `json:"changes,omitempty"`
 }
 
 // Manager owns every agent.
 type Manager struct {
-	rt  Runtime
-	dir string // where agents persist ("" = memory only)
+	rt     Runtime
+	dir    string // where agents persist ("" = memory only)
+	isoDir string // where specialists' worktrees / copies go ("" = no isolation)
 
 	mu      sync.Mutex
 	cap     int
@@ -177,6 +203,13 @@ func CleanHandle(h string) string {
 // Dispatch starts (or queues) a new agent and returns at once. The returned handle
 // may differ from the one asked for when a finished agent already used it.
 func (m *Manager) Dispatch(handle, task string, scope []string, conv, folder string) (string, string, error) {
+	return m.DispatchAgent(&Agent{Handle: handle, Task: task, Scope: scope, Conv: conv, Folder: folder})
+}
+
+// DispatchAgent starts (or queues) a prepared agent: Handle and Task set, plus any of
+// Scope, Conv, Folder and the specialist fields.
+func (m *Manager) DispatchAgent(spec *Agent) (string, string, error) {
+	handle, task := spec.Handle, spec.Task
 	handle = CleanHandle(handle)
 	task = strings.TrimSpace(task)
 	if handle == "" {
@@ -189,7 +222,11 @@ func (m *Manager) Dispatch(handle, task string, scope []string, conv, folder str
 	if a, ok := m.agents[handle]; ok {
 		if Active(a.Status) {
 			m.mu.Unlock()
-			return "", "", fmt.Errorf("an agent called %q is already %s; steer it with message_agent instead of starting a duplicate", handle, a.Status)
+			steer := "message_agent"
+			if spec.Kind == Specialist {
+				steer = "message_specialist"
+			}
+			return "", "", fmt.Errorf("an agent called %q is already %s; steer it with %s instead of starting a duplicate", handle, a.Status, steer)
 		}
 		base := handle
 		for i := 2; ; i++ {
@@ -199,7 +236,8 @@ func (m *Manager) Dispatch(handle, task string, scope []string, conv, folder str
 			}
 		}
 	}
-	a := &Agent{Handle: handle, Task: task, Scope: scope, Conv: conv, Folder: folder, Status: Queued, Created: time.Now(), Runs: 1}
+	a := spec
+	a.Handle, a.Task, a.Status, a.Created, a.Runs = handle, task, Queued, time.Now(), 1
 	a.History = []llm.Message{{Role: "user", Content: task}}
 	m.agents[handle] = a
 	m.queue = append(m.queue, handle)
@@ -279,10 +317,24 @@ func (m *Manager) run(ctx context.Context, a *Agent, gen int) {
 		}
 		m.finish(a, gen, status, result, errText)
 	}()
-	for step := 0; step < m.rt.MaxSteps; step++ {
+	if err := m.prepare(a); err != nil {
+		errText = err.Error()
+		return
+	}
+	max := m.rt.MaxSteps
+	if a.MaxSteps > 0 {
+		max = a.MaxSteps
+	}
+	for step := 0; step < max; step++ {
 		if ctx.Err() != nil {
 			status = Cancelled
 			return
+		}
+		if m.rt.Guard != nil {
+			if why := m.rt.Guard(a); why != "" {
+				errText = why
+				return
+			}
 		}
 		m.mu.Lock()
 		// Steering: instructions from the main agent arrive at the next step.
@@ -291,10 +343,9 @@ func (m *Manager) run(ctx context.Context, a *Agent, gen int) {
 		}
 		a.inbox = nil
 		hist := trim(a.History)
-		scope := a.Scope
 		m.mu.Unlock()
 		msgs := append([]llm.Message{{Role: "system", Content: m.rt.System(a)}}, hist...)
-		r, err := m.rt.Complete(ctx, msgs, m.rt.Tools(scope))
+		r, err := m.rt.Complete(ctx, msgs, m.rt.Tools(a))
 		if err != nil {
 			if ctx.Err() != nil {
 				status = Cancelled
@@ -308,10 +359,13 @@ func (m *Manager) run(ctx context.Context, a *Agent, gen int) {
 		if strings.TrimSpace(r.Text) != "" || len(n.Calls) > 0 {
 			a.History = append(a.History, llm.Message{Role: "assistant", Content: r.Text, ToolCalls: n.Calls})
 		}
+		if a.Kind == Specialist && a.Plan == "" && strings.TrimSpace(r.Text) != "" && len(n.Calls) > 0 {
+			a.Plan = shortPlan(r.Text) // its first words while it starts working
+		}
 		pending := len(a.inbox) > 0
 		m.mu.Unlock()
 		if len(n.Calls) == 0 {
-			if pending || (len(n.Dropped) > 0 && step < m.rt.MaxSteps-1) {
+			if pending || (len(n.Dropped) > 0 && step < max-1) {
 				if len(n.Dropped) > 0 {
 					m.mu.Lock()
 					a.History = append(a.History, llm.Message{Role: "user", Content: "Blaze couldn't run " + strings.Join(n.Dropped, "; ") + ". Call the tool again with its exact name and a complete JSON object."})
@@ -358,7 +412,7 @@ func (m *Manager) run(ctx context.Context, a *Agent, gen int) {
 			m.save(a)
 		}
 	}
-	errText = fmt.Sprintf("stopped after %d steps without finishing", m.rt.MaxSteps)
+	errText = fmt.Sprintf("stopped after %d steps without finishing", max)
 }
 
 var badRe = regexp.MustCompile(`^(Error|exit [1-9]|Refused|Blaze couldn't)|did NOT approve`)
@@ -377,6 +431,24 @@ func (m *Manager) finish(a *Agent, gen int, status, result, errText string) {
 	}
 	a.Status, a.Result, a.Error, a.Ended, a.Now = status, result, errText, time.Now(), ""
 	a.cancel = nil
+	iso := a.Iso
+	if a.Review == "applied" || a.Review == "discarded" {
+		iso = nil
+	}
+	m.mu.Unlock()
+	if iso != nil {
+		cs, _, err := iso.Changes(0)
+		m.mu.Lock()
+		if err == nil {
+			a.Changes = cs
+			a.Review = "pending"
+			if len(cs) == 0 {
+				a.Review = "none"
+			}
+		}
+		m.mu.Unlock()
+	}
+	m.mu.Lock()
 	v := m.view(a)
 	m.mu.Unlock()
 	m.save(a)
@@ -541,7 +613,11 @@ func (m *Manager) Discard(handle string) error {
 	}
 	delete(m.agents, a.Handle)
 	a.gen++
+	iso := a.Iso
 	m.mu.Unlock()
+	if iso != nil {
+		_ = iso.Remove(true)
+	}
 	if m.dir != "" {
 		_ = os.Remove(filepath.Join(m.dir, a.Handle+".json"))
 	}
@@ -599,7 +675,11 @@ func (m *Manager) Summary(conv string) string {
 	}
 	var b strings.Builder
 	for _, v := range vs {
-		fmt.Fprintf(&b, "- %s · %s · %d step(s)", v.Handle, v.Status, v.N)
+		kind := ""
+		if v.Kind == Specialist {
+			kind = " (specialist, " + v.Mode + ")"
+		}
+		fmt.Fprintf(&b, "- %s%s · %s · %d step(s)", v.Handle, kind, v.Status, v.N)
 		if v.Now != "" && Active(v.Status) {
 			fmt.Fprintf(&b, " · now: %s", v.Now)
 		}
@@ -639,6 +719,11 @@ func (m *Manager) view(a *Agent) View {
 			v.Ended = a.Ended.UnixMilli()
 		}
 		v.Seconds = end.Sub(a.Started).Seconds()
+	}
+	v.Kind, v.Mode, v.Workdir, v.Plan, v.Review = a.Kind, a.Mode, a.Workdir, a.Plan, a.Review
+	v.Changes = append([]Change(nil), a.Changes...)
+	if a.Iso != nil {
+		v.Iso, v.Branch, v.Path = a.Iso.Kind, a.Iso.Branch, a.Iso.Workdir()
 	}
 	if a.Status == Queued {
 		for i, h := range m.queue {
@@ -710,13 +795,20 @@ func (m *Manager) Load() int {
 func (m *Manager) Prune(age time.Duration) {
 	m.mu.Lock()
 	var gone []string
+	var isos []*Isolation
 	for h, a := range m.agents {
-		if (a.Status == Done || a.Status == Failed || a.Status == Cancelled) && !a.Ended.IsZero() && time.Since(a.Ended) > age {
+		if (a.Status == Done || a.Status == Failed || a.Status == Cancelled) && !a.Ended.IsZero() && time.Since(a.Ended) > age && a.Review != "pending" {
 			delete(m.agents, h)
 			gone = append(gone, h)
+			if a.Iso != nil {
+				isos = append(isos, a.Iso)
+			}
 		}
 	}
 	m.mu.Unlock()
+	for _, iso := range isos {
+		_ = iso.Remove(true)
+	}
 	for _, h := range gone {
 		if m.dir != "" {
 			_ = os.Remove(filepath.Join(m.dir, h+".json"))

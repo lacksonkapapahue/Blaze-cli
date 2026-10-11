@@ -38,7 +38,7 @@ blaze learn [on|off]           learn memories and skills automatically (shared w
 `blaze update` (or `/update` in chat) uses `GITHUB_TOKEN`, or your `gh` login, while the repo is private.
 Blaze checks for a new version at most once a day and mentions it under the banner (`BLAZE_NO_UPDATE_CHECK=1` turns that off).
 Flags: `--autopilot` (or `--yolo`), `--plan`, `--model provider/model`.
-In chat: `/clear /model /plan /build /auto /autopilot /agents /login /whoami /logout /connect /notify /skills /learn /jobs /schedule /pc /doctor /setup /update /exit`. Ctrl-C stops the running task.
+In chat: `/clear /model /plan /build /auto /autopilot /agents /login /whoami /logout /connect /notify /skills /learn /jobs /schedule /pc /doctor /setup /update /exit`. Ctrl-C stops the running task; Ctrl+O shows the last steps in full.
 
 ### Modes (same as Blaze Desktop)
 | Mode | What it does |
@@ -59,6 +59,20 @@ over your typing). Agents are saved in `~/.blaze/cli/agents/`; if Blaze closes m
 (`/agents resume NAME`), and after an in-chat update they resume by themselves.
 `/agents` lists them · `/agents NAME` shows its steps and report · `/agents msg NAME text` steers it ·
 `/agents cancel|resume|discard NAME` · `/agents new NAME task` starts one yourself.
+
+### Specialists and an always-open prompt
+The main chat stays light: it talks, plans and steers, and hands real work to agents. A big task with independent parts is
+split between **specialists** (`dispatch_specialist`), the way Blaze Desktop does it: they run in parallel (sharing the agents'
+cap), each Build specialist in its own git worktree (or a copy of the folder) under `~/.blaze/cli/worktrees/`, and never with
+more than the lead has (Plan lead → Plan specialists; Autopilot's budgets). When one reports back the main chat reviews its
+diff and applies or discards it; you can too with `/agents apply|reject NAME`.
+
+The prompt never goes away: while Blaze works you can keep typing on the working line, and Enter queues the message for its
+next turn (approvals and questions still take the keys while they are open). Handing work off ends the main turn at once.
+
+While working Blaze says what it is doing in plain words ("Reading main.go", "Running the tests"), never commands or code. A
+finished turn folds into one line, `Worked · 5 steps · 12s · ctrl+o to expand`; **Ctrl+O** at the prompt shows the exact
+commands, output and diffs, and hides them again. `BLAZE_STEPS=all` also prints a plain line per finished step.
 
 ### Account and connectors
 `blaze login` signs in through Blaze's sign-in service (`https://blaze-auth.blaze-app.workers.dev`): email + password, or

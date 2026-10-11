@@ -194,7 +194,11 @@ var (
 	spinners   atomic.Int32
 )
 
-func wakeable() bool { edMu.Lock(); defer edMu.Unlock(); return activeEd != nil }
+func wakeable() bool {
+	edMu.Lock()
+	defer edMu.Unlock()
+	return activeEd != nil || taReading.Load() // the open prompt, or the composer under the working line (typeahead.go)
+}
 
 // Wake makes an open prompt return ErrWake (keeping what was typed). Called while no
 // prompt is open, the next Read returns ErrWake at once.
@@ -214,6 +218,7 @@ func Wake() {
 // Above prints lines over the open prompt (or over the spinner while a task runs).
 // With neither on screen, the lines wait and show when the prompt next opens.
 func Above(lines ...string) {
+	touchActivity()
 	edMu.Lock()
 	defer edMu.Unlock()
 	switch {
