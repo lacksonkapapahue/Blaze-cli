@@ -58,3 +58,60 @@ func TestFilesMenu(t *testing.T) {
 		t.Error("the / menu broke")
 	}
 }
+
+func TestArgMenus(t *testing.T) {
+	get := func(line string) []string {
+		m := slashMenu(line)
+		if m == nil {
+			return nil
+		}
+		var out []string
+		for _, it := range m.Items {
+			out = append(out, it.Insert)
+		}
+		return out
+	}
+	has := func(line, insert string) {
+		t.Helper()
+		for _, in := range get(line) {
+			if in == insert {
+				return
+			}
+		}
+		t.Errorf("%q: no %q in %v", line, insert, get(line))
+	}
+	has("/connect ", "/connect google")
+	has("/connect ", "/connect")
+	has("/connect go", "/connect google")
+	has("/connect google ", "/connect google --manual")
+	has("/disconnect ", "/disconnect github")
+	has("/login ", "/login github")
+	has("/keys ", "/keys sync")
+	has("/learn ", "/learn off")
+	has("/update ", "/update --force")
+	has("/mcp ", "/mcp reload")
+	has("/mcp ", "/mcp remove ")
+	has("/agents ", "/agents msg ")
+	has("/agents cap ", "/agents cap 3")
+	if get("/learn off ") != nil || get("/login github x") != nil {
+		t.Error("a menu after the last option")
+	}
+	if m := slashMenu("/connect "); m == nil || m.Items[0].Submit != true {
+		t.Error("picking an app should run it")
+	}
+	if m := slashMenu("/mcp "); m == nil {
+		t.Fatal("no /mcp menu")
+	} else {
+		for _, it := range m.Items {
+			if it.Insert == "/mcp remove " && it.Submit {
+				t.Error("remove needs a name: Enter must fill in, not run")
+			}
+		}
+	}
+	// every command whose menu entry promises options (›) opens a menu after the space
+	for _, c := range slashMenuCmds {
+		if c.sub && slashMenu(c.name+" ") == nil && c.name != "/model" {
+			t.Errorf("%s is marked as having options but opens no menu", c.name)
+		}
+	}
+}

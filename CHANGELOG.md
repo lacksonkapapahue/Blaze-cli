@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.8.2 — The real chat bar stays while Blaze works, and @ lists your files
+## v0.8.2 — The real chat bar stays while Blaze works, and menus for @ and every command's options
 
 - **The composer box stays on screen during a turn.** Instead of the short "› type to queue a message" beside the working
   line, the same boxed chat bar as the prompt sits under it, with the mode glyph, a caret and a footer. Type there, and
@@ -10,6 +10,10 @@
 - **"@" opens a files menu**, the same pop-up as "/": the folder's folders (first) and files with their sizes, filtered as
   you type. Picking a folder lists what's inside it, and picking a file fills in `@path ` so you keep typing. Dotfiles
   show once you type a dot, and `.git` never does. It works at the prompt and in the composer box during a turn.
+- **Every command with options shows them.** After a command and a space, its choices pop up the way "/" does:
+  `/connect` (the apps, then `--manual`), `/disconnect`, `/login`, `/keys`, `/learn`, `/update`, `/mcp` (the actions,
+  then your servers' names), `/agents` (the actions, then this chat's agents or specialists, 1-6 for `cap`). Commands
+  that take options are marked `›` in the menu. The README's new "Commands and their options" table lists them all.
 - In the composer box during a turn, "/" and "@" menus work like at the prompt: ↑ ↓ move, Tab or Enter fills in, Esc closes.
 
 ## v0.8.1 — Verified downloads and tidier releases

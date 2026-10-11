@@ -41,7 +41,30 @@ blaze learn [on|off]           learn memories and skills automatically (shared w
 ```
 Blaze checks for a new version at most once a day and mentions it under the banner (`BLAZE_NO_UPDATE_CHECK=1` turns that off).
 Flags: `--autopilot` (or `--yolo`), `--plan`, `--model provider/model`.
-In chat: `/clear /model /plan /build /auto /autopilot /agents /login /whoami /logout /connect /mcp /notify /skills /learn /jobs /schedule /pc /doctor /setup /update /exit`. Ctrl-C stops the running task; Ctrl+O shows the last steps in full.
+In chat, type `/` and every command pops up above the box with what it does; Ctrl-C stops the running task and Ctrl+O shows
+the last steps in full.
+
+### Commands and their options
+You never have to remember an option. Type a command and a space (or pick a command marked `›` in the `/` menu) and its
+choices pop up above the box, filtered as you type: ↑ ↓ move, Enter or Tab picks, Esc closes. Choices marked `›` take
+another word, so picking one opens the next menu. The same menus work in the box while Blaze is working.
+
+| Command | Options that pop up |
+|---|---|
+| `/connect` | `list` · `google` · `github` · `notion` · `slack` · `spotify`, then `--manual` (use your own developer app) |
+| `/disconnect` | the apps: `google` · `github` · `notion` · `slack` · `spotify` |
+| `/login` | `email` · `google` · `github` · `signup` |
+| `/keys` | `list` · `sync` |
+| `/learn` | `on` · `off` |
+| `/model` | the models in your chain, then `auto` |
+| `/skills` | your skills (picking one starts a message that uses it) · `list` · `on` · `off` · `delete` · `restore`, then the skills each applies to |
+| `/mcp` | `list` · `reload` · `add` · `remove` · `enable` · `disable`, then your servers' names |
+| `/agents` | `list` · `new` · `msg` · `cancel` · `resume` · `discard` · `apply` · `reject` · `cap`, then this chat's agents (specialists for apply/reject, 1-6 for cap) |
+| `/update` | `--force` (reinstall the newest build) |
+| `@` | the folder's folders and files; picking a folder lists what's inside it |
+
+Commands with nothing to choose: `/clear` `/resume` `/compact` `/init` `/plan` `/build` `/auto` `/autopilot` `/jobs`
+`/schedule` `/whoami` `/logout` `/notify [text]` `/pc` `/doctor` `/setup` `/help` `/exit`.
 
 ### Modes (same as Blaze Desktop)
 | Mode | What it does |
