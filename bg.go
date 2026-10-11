@@ -28,6 +28,36 @@ import (
 
 func agentsDir() string { return filepath.Join(config.Dir(), "cli", "agents") }
 
+// worktreesDir is where specialists get their own git worktree or folder copy.
+func worktreesDir() string { return filepath.Join(config.Dir(), "cli", "worktrees") }
+
+// agentPlan is true when an agent may only read and scout: a Plan specialist, or
+// any agent while the main agent (the lead) is in Plan mode.
+func (b *bgAgents) agentPlan(ag *agents.Agent) bool { return ag.Mode == "plan" || b.main.Env.Plan }
+
+// writesFiles are the file tools a specialist could aim at the original folder.
+var writesFiles = map[string]bool{"file_write": true, "file_edit": true, "file_delete": true}
+
+func insideDir(dir, p string) bool {
+	rel, err := filepath.Rel(filepath.Clean(dir), filepath.Clean(p))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// isoBlock refuses a Build specialist's write into the original folder (it works in
+// its own copy; the lead applies the changes after review).
+func isoBlock(ag *agents.Agent, name, rawArgs string) string {
+	if ag.Iso == nil || !writesFiles[name] {
+		return ""
+	}
+	var args map[string]any
+	_ = json.Unmarshal([]byte(rawArgs), &args)
+	p, _ := args["path"].(string)
+	if p != "" && filepath.IsAbs(p) && insideDir(ag.Iso.OriginalWorkdir(), p) && !insideDir(ag.Iso.Path, p) {
+		return "Refused: " + p + " is in the original folder. Work only in your own copy, " + ag.Iso.Workdir() + " (the same relative path there); the lead applies your changes after review."
+	}
+	return ""
+}
+
 // resumeMarker is written before /update restarts Blaze while agents run.
 func resumeMarker() string { return filepath.Join(config.Dir(), "cli", "resume-after-update") }
 
@@ -79,10 +109,11 @@ func newBG(a *agent.Agent) *bgAgents {
 			return names
 		},
 		Exec:     b.exec,
-		System:   func(ag *agents.Agent) string { return a.SystemPrompt() + agents.SubSystem(ag.Handle) },
-		Describe: describeCall,
+		System:   func(ag *agents.Agent) string { return a.SystemPrompt() + agents.AgentSystem(ag) },
+		Describe: agent.PlainStep,
 		MaxSteps: steps,
 	}, agentsDir(), n)
+	b.m.SetIsolationDir(worktreesDir())
 	b.m.OnChange = func(agents.View) { ui.Refresh() }
 	b.m.OnResult = func(v agents.View) {
 		b.mu.Lock()
@@ -112,11 +143,15 @@ func newBG(a *agent.Agent) *bgAgents {
 
 // tools is a sub-agent's tool list: everything the main agent has except the
 // agent-control tools and update_blaze, plus ask_user, narrowed to the scope.
-func (b *bgAgents) tools(scope []string) []llm.Tool {
+func (b *bgAgents) tools(ag *agents.Agent) []llm.Tool {
+	var scope []string
+	if ag != nil {
+		scope = ag.Scope
+	}
 	all := tools.All()
 	all = append(all, notifyTool())
 	all = append(all, getConns().Tools()...)
-	if b.main.Env.Plan {
+	if b.main.Env.Plan || (ag != nil && ag.Mode == "plan") {
 		var ro []llm.Tool
 		for _, t := range all {
 			if tools.PlanAllows(t.Function.Name) || getConns().ReadOnly(t.Function.Name) {
@@ -147,7 +182,7 @@ func (b *bgAgents) env(ag *agents.Agent) *tools.Env {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if e := b.envs[ag.Handle]; e != nil {
-		e.Plan = b.main.Env.Plan
+		e.Plan = b.agentPlan(ag)
 		return e
 	}
 	root := ag.Folder
@@ -156,7 +191,7 @@ func (b *bgAgents) env(ag *agents.Agent) *tools.Env {
 	}
 	h := ag.Handle
 	mainEnv := b.main.Env
-	e := &tools.Env{Info: mainEnv.Info, Root: root, Plan: mainEnv.Plan, Shell: tools.NewShell(mainEnv.Info.Shell, mainEnv.Info.ShellPath, root), Jobs: mainEnv.Jobs}
+	e := &tools.Env{Info: mainEnv.Info, Root: root, Plan: b.agentPlan(ag), Shell: tools.NewShell(mainEnv.Info.Shell, mainEnv.Info.ShellPath, root), Jobs: mainEnv.Jobs}
 	e.Confirm = func(title, detail string) bool { return b.gate(h, title, detail) }
 	e.Status = func(s string) { b.m.Status(h, s) }
 	b.envs[h] = e
@@ -171,10 +206,13 @@ func (b *bgAgents) exec(ctx context.Context, ag *agents.Agent, name, args string
 		return b.question(ctx, ag.Handle, args)
 	}
 	if agents.IsMainTool(name) || name == "update_blaze" {
-		return "Error: background agents can't start or steer other agents or update Blaze. Do the work yourself."
+		return "Error: background agents and specialists can't start or steer other agents or update Blaze. Do the work yourself."
 	}
-	if b.main.Env.Plan && !(tools.PlanAllows(name) || getConns().ReadOnly(name)) {
+	if b.agentPlan(ag) && !(tools.PlanAllows(name) || getConns().ReadOnly(name)) {
 		return agent.PlanRefusal
+	}
+	if why := isoBlock(ag, name, args); why != "" {
+		return why
 	}
 	if name == "notify" {
 		return runNotify(args)

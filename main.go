@@ -78,9 +78,9 @@ func main() {
 		}
 	}
 	cfg := config.Load()
-	if model != "" {
+	if model != "" { // this run only; /model in the chat is what Blaze remembers
 		prov, m, _ := strings.Cut(model, "/")
-		cfg.Chain = append([]config.Entry{{Provider: prov, Model: m}}, cfg.Chain...)
+		cfg.Session = &config.Entry{Provider: prov, Model: m}
 	}
 	cmd := ""
 	if len(rest) > 0 {
@@ -214,23 +214,95 @@ func accountCmd(cmd string, args []string) error {
 	return nil
 }
 
-var slashCmds = []string{"/agents", "/auto", "/autopilot", "/build", "/clear", "/compact", "/connect", "/disconnect", "/doctor", "/exit", "/help", "/init", "/jobs", "/learn", "/login", "/logout", "/model", "/new", "/notify", "/pc", "/plan", "/quit", "/resume", "/schedule", "/setup", "/skills", "/update", "/whoami", "/yolo"}
+// slashMenu is the "/" menu: every chat command with one line about it.
+var slashMenu = []ui.MenuItem{
+	{Name: "/agents", Desc: "background agents and specialists: list · show · msg · cancel · apply"},
+	{Name: "/model", Desc: "pick the model (remembered here and in Blaze Desktop)"},
+	{Name: "/plan", Desc: "Plan mode: look and propose, nothing changes"},
+	{Name: "/build", Desc: "Build mode: every tool"},
+	{Name: "/auto", Desc: "risky actions ask first"},
+	{Name: "/autopilot", Desc: "nothing asks; catastrophic actions stay blocked"},
+	{Name: "/steps", Desc: "the last turn's steps with their exact commands (ctrl+o)"},
+	{Name: "/clear", Desc: "new conversation"},
+	{Name: "/resume", Desc: "reload this folder's last conversation"},
+	{Name: "/compact", Desc: "summarise the chat to free up context"},
+	{Name: "/init", Desc: "write BLAZE.md: how this project builds, tests, runs"},
+	{Name: "/skills", Desc: "skill library: list · show · on|off|delete|restore"},
+	{Name: "/learn", Desc: "learn memories and skills automatically: on | off"},
+	{Name: "/jobs", Desc: "background jobs (servers, watchers)"},
+	{Name: "/schedule", Desc: "scheduled jobs"},
+	{Name: "/connect", Desc: "connect Google, GitHub, Notion, Slack…"},
+	{Name: "/disconnect", Desc: "disconnect an app"},
+	{Name: "/login", Desc: "sign in to your Blaze account"},
+	{Name: "/logout", Desc: "sign out"},
+	{Name: "/whoami", Desc: "which Blaze account is signed in"},
+	{Name: "/notify", Desc: "test a desktop notification"},
+	{Name: "/pc", Desc: "what Blaze knows about this PC"},
+	{Name: "/doctor", Desc: "check models, shell, tools"},
+	{Name: "/setup", Desc: "detect this PC, add free models"},
+	{Name: "/update", Desc: "get the newest Blaze"},
+	{Name: "/help", Desc: "commands and keys"},
+	{Name: "/exit", Desc: "quit Blaze"},
+}
 
+// modelName is the model a turn starts on, "Google Gemini · gemini-3.8-flash".
 func modelName(a *agent.Agent) string {
 	for _, e := range a.Cfg.RouteChain() {
-		if p, ok := config.ProviderByID(e.Provider); ok {
-			if e.Model != "" {
-				return p.Name + " · " + e.Model
-			}
-			return p.Name
+		p, ok := config.ProviderByID(e.Provider)
+		if !ok || !a.Cfg.Usable(e.Provider) {
+			continue
 		}
+		if e.Model == "" {
+			e.Model = p.DefaultModel
+		}
+		if e.Model != "" {
+			return p.Name + " · " + e.Model
+		}
+		return p.Name
 	}
 	return "no model yet"
+}
+
+// entryName is "Google Gemini · gemini-3.8-flash" for a chain entry.
+func entryName(e config.Entry) string {
+	name := e.Provider
+	if p, ok := config.ProviderByID(e.Provider); ok {
+		name = p.Name
+		if e.Model == "" {
+			e.Model = p.DefaultModel
+		}
+	}
+	if e.Model != "" {
+		return name + " · " + e.Model
+	}
+	return name
+}
+
+// modelNote is the one line shown at start when the last-picked model can't run.
+func modelNote(a *agent.Agent) string {
+	why := a.Cfg.Fallback()
+	if why == "" {
+		return ""
+	}
+	d, _ := a.Cfg.Preferred()
+	return "Your last model, " + entryName(d) + ", isn't available (" + why + "); using " + modelName(a) + ". /model picks another."
+}
+
+// safeWhileBusy are commands that run at once even while a turn runs; every other
+// command waits in the queue like a message.
+var safeWhileBusy = map[string]bool{
+	"/agents": true, "/help": true, "/jobs": true, "/schedule": true, "/skills": true, "/learn": true,
+	"/model": true, "/plan": true, "/build": true, "/auto": true, "/autopilot": true, "/yolo": true,
+	"/steps": true, "/pc": true, "/whoami": true, "/notify": true, "/doctor": true,
+	"/exit": true, "/quit": true, "/q": true,
 }
 
 func repl(a *agent.Agent, bg *bgAgents, in sysinfo.Info, cont bool) {
 	ui.Welcome(version, modelName(a), in.OSName+" · "+in.Shell+" · "+shortPath(a.Env.Root),
 		ui.Weak("/ commands  ·  @ files  ·  ! shell  ·  # remember  ·  ⇧tab modes  ·  /agents"))
+	if note := modelNote(a); note != "" {
+		ui.Println("  " + ui.Accent("■ ") + ui.Sub(note))
+	}
 	ui.FocusReporting(true)
 	defer ui.FocusReporting(false)
 	bg.startupNotice()
@@ -240,12 +312,27 @@ func repl(a *agent.Agent, bg *bgAgents, in sysinfo.Info, cont bool) {
 	if cont {
 		resume(a)
 	}
+	ui.SetLive(true)
+	defer ui.SetLive(false)
+	ui.AgentsHook = bg.liveLines
+
+	t := newTurns(ui.Wake, ui.SetQueued, bg.pending)
 	ed := &ui.Editor{
 		HistoryFile: filepath.Join(config.Dir(), "history"),
-		Commands:    slashCmds,
+		Menu:        slashMenu,
+		Dir:         func() string { return a.Env.Shell.Cwd() },
 		Placeholder: "Ask anything, or give a task",
 		Boxed:       true,
 		OnShiftTab:  func() { cycleMode(a) },
+		Busy:        t.Busy,
+		OnInterrupt: func() { t.Interrupt() },
+		OnImage: func(png []byte) string {
+			p, err := ui.SaveClipImage(filepath.Join(config.Dir(), "cli", "clipboard"), png)
+			if err != nil {
+				return ""
+			}
+			return "@" + p + " "
+		},
 	}
 	ed.Glyph = func(line string) string {
 		switch {
@@ -263,47 +350,36 @@ func repl(a *agent.Agent, bg *bgAgents, in sysinfo.Info, cont bool) {
 		case strings.HasPrefix(line, "#"):
 			return "  " + ui.Accent("# memory") + ui.Weak(" · Blaze keeps this for next time")
 		}
-		tail := ""
-		if st := bg.statusLine(); st != "" {
-			tail = ui.Weak("  ·  ") + st
+		busy := ""
+		if t.Busy() {
+			busy = ui.Weak(" · enter queues · esc stops")
 		}
 		switch {
 		case a.Env.Plan:
-			return "  " + ui.Accent("▤ plan") + ui.Weak(" · read and propose, nothing changes (shift+tab)") + tail
+			return "  " + ui.Accent("▤ plan") + ui.Weak(" · read and propose, nothing changes (shift+tab)") + busy
 		case a.Autopilot():
-			return "  " + ui.Accent("⏵⏵ build · autopilot") + ui.Weak(" · nothing asks (shift+tab)") + tail
+			return "  " + ui.Accent("⏵⏵ build · autopilot") + ui.Weak(" · nothing asks (shift+tab)") + busy
 		}
-		return "  " + ui.Weak("build · auto · ? /help · @ files · ! shell · # remember · shift+tab modes") + tail
+		return "  " + ui.Weak("build · auto · / commands · @ files · ! shell · # remember · shift+tab modes") + busy
 	}
 
-	// Ctrl-C cancels the running turn (the prompt reads Ctrl-C itself).
+	// Ctrl-C cancels the running turn when the terminal is in its normal mode (the
+	// open prompt reads Ctrl-C itself as a key).
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt)
-	var mu sync.Mutex
-	var cancel context.CancelFunc
 	go func() {
 		for range sig {
-			mu.Lock()
-			c := cancel
-			mu.Unlock()
-			if c != nil {
-				c()
-			}
+			t.Interrupt()
 		}
 	}()
-	var run func(prompt string)
-	run = func(prompt string) {
-		ctx, c := context.WithCancel(context.Background())
-		mu.Lock()
-		cancel = c
-		mu.Unlock()
-		restore := ui.Quiet()
+
+	// turn is one main-agent turn; it runs in the background while the prompt stays open.
+	var turn func(ctx context.Context, prompt string, att []llm.Attach)
+	turn = func(ctx context.Context, prompt string, att []llm.Attach) {
+		ui.BeginWork()
+		a.NextAttach = att
 		_, err := a.Ask(ctx, prompt)
-		restore()
-		mu.Lock()
-		cancel = nil
-		mu.Unlock()
-		c()
+		ui.EndWork()
 		a.Save()
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
@@ -313,7 +389,7 @@ func repl(a *agent.Agent, bg *bgAgents, in sysinfo.Info, cont bool) {
 			}
 			return
 		}
-		if restartAfterTurn {
+		if restartAfterTurn || ctx.Err() != nil {
 			return
 		}
 		// Plan mode ends like Claude Code's: approve the plan and switch to Build.
@@ -329,37 +405,62 @@ func repl(a *agent.Agent, bg *bgAgents, in sysinfo.Info, cont bool) {
 			default:
 				return
 			}
-			run("The plan is approved. Carry it out now, step by step, keeping the checklist updated, and check your work.")
+			turn(ctx, "The plan is approved. Carry it out now, step by step, keeping the checklist updated, and check your work.", nil)
+		}
+	}
+	start := func(prompt string, att []llm.Attach) {
+		t.Start(func(ctx context.Context) { turn(ctx, prompt, att) })
+	}
+	job := func(fn func(ctx context.Context)) { t.Start(fn) }
+
+	quit := false
+	// handle does one input now: a command, a shell line, a memory, or a turn.
+	handle := func(in input) {
+		if in.agent != nil {
+			v := *in.agent
+			ui.Println("\n  " + ui.Accent("▸ ") + ui.Ink("agent "+v.Handle+" "+v.Status) + ui.Weak(" · Blaze reads its report"))
+			start(agents.ResultMessage(v), nil)
+			return
+		}
+		line := in.line
+		switch {
+		case line == "":
+		case line == "?":
+			help()
+		case strings.HasPrefix(line, "!"):
+			cmd := strings.TrimSpace(line[1:])
+			job(func(ctx context.Context) { shellMode(a, cmd) })
+		case strings.HasPrefix(line, "#"):
+			remember(a, line)
+		case strings.HasPrefix(line, "/"):
+			if slash(a, bg, line, start, job) {
+				if confirmQuit(bg) {
+					t.Interrupt()
+					quit = true
+				}
+			}
+		default:
+			prompt, att := attachFiles(a, line)
+			start(prompt, att)
 		}
 	}
 
-	// wake runs what background agents left for the main loop: their approvals and
-	// questions first, then each finished agent's result as its own turn.
-	wake := func() {
-		for bg.pending() {
-			bg.drainAsks()
-			if v, ok := bg.nextResult(); ok {
-				ui.Println("\n  " + ui.Accent("▸ ") + ui.Ink("agent "+v.Handle+" "+v.Status) + ui.Weak(" · Blaze reads its report"))
-				run(agents.ResultMessage(v))
-			}
-		}
-	}
 	lastIdle := time.Time{}
-	for {
-		if restartAfterTurn {
+	for !quit {
+		if restartAfterTurn && !t.Busy() {
 			restartNow(a, bg)
 			return
 		}
 		line, err := ed.Read(ui.Prompt())
 		if errors.Is(err, ui.ErrWake) {
-			wake()
+			bg.drainAsks()
+			pump(t, bg.nextResult, handle)
 			continue
 		}
 		if errors.Is(err, ui.ErrInterrupt) {
 			if time.Since(lastIdle) < 2*time.Second {
 				if confirmQuit(bg) {
-					ui.Goodbye()
-					return
+					break
 				}
 				continue
 			}
@@ -369,43 +470,48 @@ func repl(a *agent.Agent, bg *bgAgents, in sysinfo.Info, cont bool) {
 		}
 		if err != nil {
 			bg.m.StopAll()
-			ui.Goodbye()
-			return
+			t.Interrupt()
+			break
 		}
 		line = strings.TrimSpace(line)
-		switch {
-		case line == "":
+		if line == "" {
 			continue
-		case line == "?":
-			help()
-			continue
-		case strings.HasPrefix(line, "!"):
-			shellMode(a, strings.TrimSpace(line[1:]))
-			continue
-		case strings.HasPrefix(line, "#"):
-			fact := strings.TrimSpace(strings.TrimLeft(line, "#"))
-			if fact != "" {
-				b, _ := json.Marshal(map[string]string{"fact": fact})
-				tools.Run(a.Env, "remember", string(b))
-				ui.StepDone(true, "Remembered", fact, 0)
-			}
-			continue
-		case strings.HasPrefix(line, "/"):
-			if slash(a, bg, line, run) {
-				if confirmQuit(bg) {
-					ui.Goodbye()
-					return
-				}
+		}
+		if t.Busy() {
+			cmd := strings.Fields(line)[0]
+			switch {
+			case strings.HasPrefix(line, "#"), line == "?", strings.HasPrefix(line, "/") && safeWhileBusy[cmd]:
+				handle(input{line: line})
+			default:
+				t.Enqueue(input{line: line})
+				ui.Println("    " + ui.Accent("◦ queued") + ui.Weak(" · Blaze reads it when this turn ends (esc stops the turn)"))
 			}
 			continue
 		}
-		run(attachFiles(a, line))
+		handle(input{line: line})
+		pump(t, nil, handle)
 	}
+	t.Wait()
+	ui.SetLive(false)
+	ui.Goodbye()
 }
 
-// attachFiles turns @path mentions into attached file contents.
-func attachFiles(a *agent.Agent, line string) string {
+// remember is "#fact": save it now (works while Blaze is busy too).
+func remember(a *agent.Agent, line string) {
+	fact := strings.TrimSpace(strings.TrimLeft(line, "#"))
+	if fact == "" {
+		return
+	}
+	b, _ := json.Marshal(map[string]string{"fact": fact})
+	tools.Run(a.Env, "remember", string(b))
+	ui.StepDone(true, "Remembered", fact, 0)
+}
+
+// attachFiles turns @path mentions into attached file contents; pictures
+// (@shot.png, or one pasted with Ctrl+V) become image attachments.
+func attachFiles(a *agent.Agent, line string) (string, []llm.Attach) {
 	var extra strings.Builder
+	var att []llm.Attach
 	for _, w := range strings.Fields(line) {
 		if !strings.HasPrefix(w, "@") || len(w) < 2 {
 			continue
@@ -439,6 +545,11 @@ func attachFiles(a *agent.Agent, line string) string {
 			ui.StepDone(true, "Attached "+relPath(a, p)+"/", fmt.Sprintf("%d entries", len(names)), 0)
 			continue
 		}
+		if mime := llm.ImageMime(p); mime != "" {
+			att = append(att, llm.Attach{Kind: "image", Path: p, Name: filepath.Base(p), Mime: mime})
+			ui.StepDone(true, "Attached "+relPath(a, p), "picture", 0)
+			continue
+		}
 		b, err := os.ReadFile(p)
 		if err != nil || strings.ContainsRune(string(b[:min(len(b), 4000)]), 0) {
 			continue
@@ -449,7 +560,7 @@ func attachFiles(a *agent.Agent, line string) string {
 		fmt.Fprintf(&extra, "\n\n<file path=%q>\n%s\n</file>", p, b)
 		ui.StepDone(true, "Attached "+relPath(a, p), fmt.Sprintf("%d lines", strings.Count(string(b), "\n")+1), 0)
 	}
-	return line + extra.String()
+	return line + extra.String(), att
 }
 
 // shellMode runs a command straight away (Claude Code's "!") and lets Blaze see it.
@@ -536,26 +647,33 @@ func confirmQuit(bg *bgAgents) bool {
 	return true
 }
 
-func slash(a *agent.Agent, bg *bgAgents, line string, run func(string)) bool {
+func slash(a *agent.Agent, bg *bgAgents, line string, start func(string, []llm.Attach), job func(func(context.Context))) bool {
+	run := func(p string) { start(p, nil) }
 	f := strings.Fields(line)
 	switch f[0] {
 	case "/exit", "/quit", "/q":
 		return true
+	case "/help":
+		help()
 	case "/clear", "/new":
 		a.Reset()
 		ui.Step("New conversation.")
 	case "/resume", "/continue":
 		resume(a)
 	case "/compact":
-		var sp ui.Spinner
-		sp.Start("compacting the conversation")
-		n, err := a.Compact(context.Background())
-		sp.Stop()
-		if err != nil {
-			ui.Step(err.Error())
-		} else {
-			ui.StepDone(true, fmt.Sprintf("Compacted %d messages into a summary", n), "", 0)
-		}
+		job(func(ctx context.Context) {
+			var sp ui.Spinner
+			sp.Start("Compacting the conversation")
+			n, err := a.Compact(ctx)
+			sp.Stop()
+			if err != nil {
+				ui.Step(err.Error())
+			} else {
+				ui.StepDone(true, fmt.Sprintf("Compacted %d messages into a summary", n), "", 0)
+			}
+		})
+	case "/steps":
+		ui.ExpandWork()
 	case "/init":
 		run("Look around this project (file_list, read the README, build files and a few key sources) and write BLAZE.md in the project root for future sessions: what the project is, how to install, build, test and run it (exact commands), the layout of important folders, and conventions to follow. Under 60 lines, plain Markdown. If BLAZE.md exists, improve it instead.")
 	case "/plan":
@@ -608,18 +726,7 @@ func slash(a *agent.Agent, bg *bgAgents, line string, run func(string)) bool {
 	case "/schedule":
 		ui.Println(sched.ListText())
 	case "/model":
-		if len(f) > 1 {
-			prov, m, _ := strings.Cut(f[1], "/")
-			a.Cfg.Chain = append([]config.Entry{{Provider: prov, Model: m}}, a.Cfg.Chain...)
-			ui.Step("Using " + f[1] + " first for this session.")
-		} else {
-			var rows []string
-			for _, e := range a.Cfg.Chain {
-				rows = append(rows, ui.Ink(e.Provider)+ui.Weak(" "+e.Model))
-			}
-			ui.Numbered(rows)
-			ui.Println("  " + ui.Weak("/model provider/model to try one first"))
-		}
+		modelCmd(a, f[1:])
 	default:
 		help()
 	}

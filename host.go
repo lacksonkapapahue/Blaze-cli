@@ -18,6 +18,7 @@ import (
 	"github.com/lacksonkapapahue/blaze-cli/internal/config"
 	"github.com/lacksonkapapahue/blaze-cli/internal/llm"
 	"github.com/lacksonkapapahue/blaze-cli/internal/notify"
+	"github.com/lacksonkapapahue/blaze-cli/internal/tools"
 	"github.com/lacksonkapapahue/blaze-cli/internal/ui"
 	"github.com/lacksonkapapahue/blaze-cli/internal/update"
 )
@@ -106,18 +107,28 @@ func wire(a *agent.Agent, interactive bool) *bgAgents {
 		ts = append(ts, notifyTool())
 		return append(ts, getConns().Tools()...)
 	}
-	a.ReadOnly = func(name string) bool { return getConns().ReadOnly(name) }
+	// A Plan lead may brief Plan specialists and steer them; apply_specialist
+	// changes files, so it waits for Build (same as the desktop).
+	a.ReadOnly = func(name string) bool { return planLeadTools[name] || getConns().ReadOnly(name) }
 	a.ExtraSystem = func() string {
 		s := ""
 		if bg != nil {
-			s += agents.Delegation
+			s += agents.Delegation + agents.Orchestration
 		}
 		return s + getConns().PromptBlock()
 	}
 	a.Handle = func(ctx context.Context, name, args string) (string, bool) {
 		switch {
 		case bg != nil && agents.IsMainTool(name):
-			return bg.m.HandleMainTool(name, args, bg.conv, a.Env.Shell.Cwd()).Result, true
+			// Specialists inherit the lead's mode and step budget (never more).
+			mode, steps := "build", a.Cfg.MaxSteps
+			if a.Env.Plan {
+				mode = "plan"
+			}
+			if a.Autopilot() {
+				steps = tools.AutopilotSteps
+			}
+			return bg.m.HandleLeadTool(name, args, agents.Lead{Conv: bg.conv, Folder: a.Env.Shell.Cwd(), Mode: mode, MaxSteps: steps}).Result, true
 		case bg != nil && name == "update_blaze":
 			a.StopSpinner()
 			return selfUpdate(bg), true
@@ -130,6 +141,9 @@ func wire(a *agent.Agent, interactive bool) *bgAgents {
 	}
 	return bg
 }
+
+// planLeadTools are the agent-control tools a Plan-mode lead keeps.
+var planLeadTools = map[string]bool{"list_agents": true, "dispatch_specialist": true, "check_specialist": true, "message_specialist": true, "cancel_specialist": true}
 
 // ---------------- update_blaze ----------------
 

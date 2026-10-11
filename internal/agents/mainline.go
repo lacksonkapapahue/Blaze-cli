@@ -2,17 +2,21 @@ package agents
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/lacksonkapapahue/blaze-cli/internal/llm"
 )
 
 // Input is one thing that starts a main-agent turn: a user message, a background
 // agent's result, or a retry.
 type Input struct {
-	Kind   string // user, agent, retry
-	Text   string // the message (user) or the result (agent)
-	Handle string // agent results: which agent
-	Conv   string // agent results: the chat the agent belongs to
+	Kind   string       // user, agent, retry
+	Text   string       // the message (user) or the result (agent)
+	Handle string       // agent results: which agent
+	Conv   string       // agent results: the chat the agent belongs to
+	Attach []llm.Attach // user messages: what the composer attached (images, files, folders)
 }
 
 // Mainline runs main-agent turns one at a time. A turn that arrives while another
@@ -98,5 +102,15 @@ func ResultMessage(v View) string {
 		}
 	}
 	b.WriteString("\n</agent_result>")
+	if v.Kind == Specialist {
+		b.WriteString("\nThis was your specialist " + strconv.Quote(v.Handle) + " (" + v.Mode + ").")
+		switch {
+		case v.Review == "pending":
+			fmt.Fprintf(&b, " It changed %d file(s) in its isolated copy: %s. Review them (check_specialist with diff: true), then apply_specialist apply or discard. Nothing has reached the user's folder yet.", len(v.Changes), changeList(v.Changes, 15))
+		case v.Review == "none":
+			b.WriteString(" It changed no files.")
+		}
+		b.WriteString(" If other specialists are still running, end your turn with at most one short progress line; summarise for the user when the last one is in.")
+	}
 	return b.String()
 }

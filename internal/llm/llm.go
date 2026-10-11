@@ -35,6 +35,7 @@ type Message struct {
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 	Name       string     `json:"name,omitempty"`
+	Attach     []Attach   `json:"-"` // pictures on a user message (attach.go)
 }
 
 type Tool struct {
@@ -63,7 +64,7 @@ var client = &http.Client{Timeout: 0}
 
 // Chat does one streamed completion against one provider/model.
 func Chat(ctx context.Context, p config.Provider, key, model string, msgs []Message, tools []Tool, onText func(string)) (*Result, error) {
-	body := map[string]any{"model": model, "messages": msgs, "stream": true}
+	body := map[string]any{"model": model, "messages": wire(msgs, VisionProvider(p.ID)), "stream": true}
 	if len(tools) > 0 {
 		body["tools"] = tools
 	}

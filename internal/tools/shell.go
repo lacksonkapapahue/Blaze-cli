@@ -238,7 +238,7 @@ var portRe = regexp.MustCompile(`(?i)(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::\]
 
 func init() {
 	register("run_shell", "Run a command in the user's shell on this PC (cd and exported variables stick between calls). Returns exit code, cwd and output. For servers or anything over ~2 minutes set background=true and follow with job_log. Not for writing files (file_write) or quick Python/Node snippets (run_code).",
-		[]prop{p("command", "string", "The command"), p("background", "boolean", "Run as a background job (servers, watchers, long builds)"), p("timeout_s", "integer", "Foreground timeout, default 120, max 1800")},
+		[]prop{p("command", "string", "The command"), p("background", "boolean", "Run as a background job (servers, watchers, long builds)"), p("timeout_s", "integer", "Foreground timeout, default 120, max 1800"), p("summary", "string", "What the command does in a few plain words for the user, e.g. Running the tests")},
 		[]string{"command"}, func(e *Env, a args) string {
 			cmd := strings.TrimSpace(a.s("command"))
 			if cmd == "" {

@@ -300,49 +300,6 @@ func (a *Agent) gate(title, detail string) bool {
 	return ui.Confirm(title, detail)
 }
 
-// Describe is the one-line wording of a tool call ("$ npm test", "read README.md").
-func Describe(tc llm.ToolCall) string { return describe(tc) }
-
-func describe(tc llm.ToolCall) string {
-	n := tc.Function.Name
-	arg := tc.Function.Arguments
-	pick := func(k string) string {
-		i := strings.Index(arg, `"`+k+`"`)
-		if i < 0 {
-			return ""
-		}
-		rest := arg[i+len(k)+2:]
-		j := strings.Index(rest, `"`)
-		if j < 0 {
-			return ""
-		}
-		rest = rest[j+1:]
-		end := strings.Index(rest, `"`)
-		if end < 0 {
-			end = len(rest)
-		}
-		v := rest[:end]
-		if len(v) > 70 {
-			v = v[:70] + "…"
-		}
-		return v
-	}
-	switch n {
-	case "run_shell":
-		return "$ " + pick("command")
-	case "file_read", "file_write", "file_edit", "file_delete", "file_list":
-		return strings.TrimPrefix(n, "file_") + " " + pick("path")
-	case "git":
-		return "git " + pick("args")
-	case "web_search":
-		return "search " + pick("query")
-	case "fetch_page":
-		return "read " + pick("url")
-	case "run_code":
-		return "run " + pick("language")
-	}
-	return strings.ReplaceAll(n, "_", " ")
-}
 
 // succeeded reads a tool result for failure: errors, non-zero exits, declines.
 func succeeded(res string) bool {
