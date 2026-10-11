@@ -1023,3 +1023,33 @@ func WorkedLine(n int, secs float64) string {
 	}
 	return strings.Join(parts, " · ")
 }
+
+// Phrases for the moments the model is working between tools, in plain words like
+// every other step (Blaze Desktop never shows "thinking").
+const (
+	Writing  = "Writing the reply"
+	Learning = "Saving what I learned"
+)
+
+// Thinking is the working line while the model decides what to do: on the first
+// step it reads the request, after a step it says what it is making of that step.
+func Thinking(step int, last string) string {
+	if step == 0 || last == "" {
+		return "Reading your request"
+	}
+	switch {
+	case strings.HasPrefix(last, "Running the tests"):
+		return "Checking the test results"
+	case strings.HasPrefix(last, "Searching the web"):
+		return "Going through the search results"
+	case strings.HasPrefix(last, "Building"):
+		return "Checking the build"
+	case strings.HasPrefix(last, "Briefing"):
+		return "Wrapping up the handoff"
+	case strings.HasPrefix(last, "Reading ") && !strings.HasPrefix(last, "Reading your"):
+		return clip("Going over "+strings.TrimPrefix(last, "Reading "), Max)
+	case strings.HasPrefix(last, "Writing ") || strings.HasPrefix(last, "Editing "):
+		return "Checking the change"
+	}
+	return "Working out the next step"
+}

@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.7.1 — No more "thinking": plain words from the first second
+
+- **The working line never says "thinking" or "writing" any more.** While the model decides what to do, Blaze now says it in
+  plain words like every other step, the way Blaze Desktop does: "Reading your request" on the first step, then what it is
+  making of the last step ("Going over main.go", "Checking the test results", "Going through the search results",
+  "Checking the change", "Working out the next step"). Streaming the answer shows "Writing the reply", and the end-of-turn
+  learning check shows "Saving what I learned". New `steps.Thinking` with tests.
+- If you still see `thinking` or no plain-words steps, you are on v0.6.x: run `blaze update` (or `/update`) to get the
+  always-open prompt, specialists and plain-words progress from v0.7.0.
+
 ## v0.7.0 — Specialists, an always-open prompt and plain-words progress
 
 - **The main chat is always reachable.** The prompt no longer disappears while Blaze works: type on the working line
