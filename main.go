@@ -42,6 +42,7 @@ func usage() {
 		ui.Accent("blaze learn [on|off]") + ui.Sub("           learn memories and skills automatically"),
 		ui.Accent("blaze login") + ui.Sub(" · ") + ui.Accent("logout") + ui.Sub(" · ") + ui.Accent("whoami") + ui.Sub("    your Blaze account (shared with Desktop)"),
 		ui.Accent("blaze connect [app]") + ui.Sub("            connect Google, GitHub, Notion, Slack…"),
+		ui.Accent("blaze keys [sync]") + ui.Sub("              your model keys (shared with Desktop and your phone)"),
 		ui.Accent("blaze update") + ui.Sub("                   get the newest Blaze"),
 		ui.Accent("blaze version"),
 	})
@@ -105,7 +106,7 @@ func main() {
 			ui.Println("  " + ui.Weak("Run blaze to use it."))
 		}
 		return
-	case "login", "logout", "whoami", "connect", "disconnect":
+	case "login", "logout", "whoami", "connect", "disconnect", "keys":
 		if err := accountCmd(cmd, rest[1:]); err != nil {
 			fail(err.Error())
 			os.Exit(1)
@@ -199,6 +200,7 @@ func main() {
 		}
 		return
 	}
+	go autoSyncKeys()
 	repl(a, wire(a, true), in, cont)
 }
 
@@ -214,11 +216,13 @@ func accountCmd(cmd string, args []string) error {
 		return cmdConnect(args)
 	case "disconnect":
 		return cmdDisconnect(args)
+	case "keys":
+		return cmdKeys(args)
 	}
 	return nil
 }
 
-var slashCmds = []string{"/agents", "/auto", "/autopilot", "/build", "/clear", "/compact", "/connect", "/disconnect", "/doctor", "/exit", "/help", "/init", "/jobs", "/learn", "/login", "/logout", "/model", "/new", "/notify", "/pc", "/plan", "/quit", "/resume", "/schedule", "/setup", "/skills", "/update", "/whoami", "/yolo"}
+var slashCmds = []string{"/agents", "/auto", "/autopilot", "/build", "/clear", "/compact", "/connect", "/disconnect", "/doctor", "/exit", "/help", "/init", "/jobs", "/keys", "/learn", "/login", "/logout", "/model", "/new", "/notify", "/pc", "/plan", "/quit", "/resume", "/schedule", "/setup", "/skills", "/update", "/whoami", "/yolo"}
 
 func repl(a *agent.Agent, bg *bgAgents, in sysinfo.Info, cont bool) {
 	ui.Welcome(version, modelName(a), in.OSName+" · "+in.Shell+" · "+shortPath(a.Env.Root),
@@ -497,7 +501,7 @@ func help() {
 		ui.Accent("/plan") + ui.Sub("      Plan mode (look, then propose; nothing changes)   ") + ui.Accent("/build"),
 		ui.Accent("/auto") + ui.Sub("      risky actions ask   ") + ui.Accent("/autopilot") + ui.Sub(" nothing asks (catastrophic stays blocked)"),
 		ui.Accent("/agents") + ui.Sub("    background agents: list · <name> · msg · cancel · resume · discard · new"),
-		ui.Accent("/login") + ui.Sub("     Blaze account   ") + ui.Accent("/whoami") + ui.Sub("   ") + ui.Accent("/logout") + ui.Sub("   ") + ui.Accent("/connect") + ui.Sub(" [app]"),
+		ui.Accent("/login") + ui.Sub("     Blaze account   ") + ui.Accent("/whoami") + ui.Sub("   ") + ui.Accent("/logout") + ui.Sub("   ") + ui.Accent("/connect") + ui.Sub(" [app]   ") + ui.Accent("/keys") + ui.Sub(" [sync]"),
 		ui.Accent("/model") + ui.Sub("     pick the model Blaze uses (saved)"),
 		ui.Accent("/skills") + ui.Sub("    skill library: list · <name> · on|off|delete|restore <name>   ") + ui.Accent("/learn") + ui.Sub(" [on|off]"),
 		ui.Accent("/jobs") + ui.Sub("      background jobs   ") + ui.Accent("/schedule") + ui.Sub(" scheduled jobs"),
@@ -570,7 +574,7 @@ func slash(a *agent.Agent, bg *bgAgents, line string, run func(string)) bool {
 		}
 	case "/agents":
 		bg.command(f[1:])
-	case "/login", "/logout", "/whoami", "/connect", "/disconnect":
+	case "/login", "/logout", "/whoami", "/connect", "/disconnect", "/keys":
 		if err := accountCmd(strings.TrimPrefix(f[0], "/"), f[1:]); err != nil {
 			fail(err.Error())
 		}

@@ -24,6 +24,7 @@ import (
 	"github.com/lacksonkapapahue/blaze-cli/internal/cloud"
 	"github.com/lacksonkapapahue/blaze-cli/internal/config"
 	"github.com/lacksonkapapahue/blaze-cli/internal/connect"
+	"github.com/lacksonkapapahue/blaze-cli/internal/keystore"
 	"github.com/lacksonkapapahue/blaze-cli/internal/ui"
 )
 
@@ -192,6 +193,11 @@ func cmdLogin(args []string) error {
 		return err
 	}
 	ui.StepDone(true, "Signed in as "+userLine(&s.User), "shared with Blaze Desktop on this computer", 0)
+	if r, err := syncKeys(20 * time.Second); err == nil {
+		reportSync(r, nil)
+	} else if !errors.Is(err, keystore.ErrUnsupported) {
+		reportSync(r, err)
+	}
 	return nil
 }
 

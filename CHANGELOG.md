@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.6.3 — Keys shared with Blaze Desktop and your phone
+
+- **One key store for Blaze CLI and Blaze Desktop** (`internal/keystore`, the same file in both repos): the OS keychain
+  under service `blaze-cli` (account `<provider>`, plus `<provider>#extra` for Desktop's extra keys), or, with no
+  keychain, `~/.blaze/keys.json` (0600) read fresh on every use, so two running apps never overwrite each other's keys.
+  A key added in either app works in the other straight away; removing a provider removes its extra keys too.
+- **One-time migration:** keys an older Blaze kept under `"keys"` in `config.json` are copied into the store (keys
+  already there win). The legacy copy stays so an older Blaze on the same PC keeps working, is still read as a last
+  resort, and is removed when you delete that key.
+- **Keys follow your Blaze account** to Blaze on your phone and other computers: right after `blaze login`, when a key
+  is saved or removed, and at start (at most hourly) while signed in. The apps encrypt the keys (AES-256-GCM) before
+  upload; the service only stores the blob (see Blaze-dekstop `cloud/README.md`). Merge is per provider, newest change
+  wins, and keys saved before syncing existed are merged rather than replaced. Connector tokens and the session never
+  sync. Until the service's `/v1/keys` is live, keys simply stay shared on this computer.
+- **`blaze keys`** lists saved keys and where they live; **`blaze keys sync`** (or `/keys sync`) syncs now.
+- Tests: two apps on one store (keychain and keys.json), legacy migration, merge rules, sync between two devices
+  against a fake service, deletions, idle sync writes nothing.
+
 ## v0.6.2 — No more stray ^[[O; /model is saved
 
 - **Fixed a literal `^[[O` appearing on screen** (e.g. under "Resumed 2 messages" after `blaze -c`). That is the

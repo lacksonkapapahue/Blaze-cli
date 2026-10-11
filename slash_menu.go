@@ -38,6 +38,7 @@ var slashMenuCmds = []slashCmd{
 	{"/logout", "Sign out (here and in Blaze Desktop)", false},
 	{"/connect", "Connect an app: google · github · notion · slack · spotify", false},
 	{"/disconnect", "Disconnect an app", false},
+	{"/keys", "Your model keys (shared with Desktop and your phone): sync", false},
 	{"/notify", "Desktop notifications when a task finishes", false},
 	{"/pc", "What Blaze detected about this PC", false},
 	{"/doctor", "Check models, shell, tools and scheduler", false},

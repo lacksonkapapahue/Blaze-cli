@@ -1,6 +1,10 @@
 // Package config keeps Blaze's settings in ~/.blaze/config.json and API keys in
-// the OS keychain (Windows Credential Manager, macOS Keychain, Linux Secret
-// Service), falling back to the config file (mode 0600) when no keychain exists.
+// the shared key store (internal/keystore): the OS keychain (Windows Credential
+// Manager, macOS Keychain, Linux Secret Service), falling back to ~/.blaze/keys.json
+// (mode 0600) when no keychain exists. Blaze Desktop uses the same store and the same
+// config.json, so a key saved in either app works in both. Legacy keychain-less keys
+// under "keys" in config.json are read by the store and kept by Save (an older Blaze
+// still reads them).
 package config
 
 import (
@@ -10,10 +14,8 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/zalando/go-keyring"
+	"github.com/lacksonkapapahue/blaze-cli/internal/keystore"
 )
-
-const service = "blaze-cli"
 
 type Provider struct {
 	ID, Name, BaseURL, DefaultModel, KeyHint, KeyPage, Env string
@@ -51,13 +53,12 @@ type Entry struct {
 }
 
 type Config struct {
-	Chain       []Entry           `json:"chain"`          // tried in order; first healthy one answers
-	Keys        map[string]string `json:"keys,omitempty"` // only when no keychain is available
-	AutoApprove bool              `json:"auto_approve"`   // --yolo default
-	SetupDone   bool              `json:"setup_done"`
-	MaxSteps    int               `json:"max_steps"`
-	Persona     string            `json:"persona,omitempty"`
-	NoKeyless   bool              `json:"no_keyless,omitempty"` // don't fall back to the keyless model
+	Chain       []Entry `json:"chain"`        // tried in order; first healthy one answers
+	AutoApprove bool    `json:"auto_approve"` // --yolo default
+	SetupDone   bool    `json:"setup_done"`
+	MaxSteps    int     `json:"max_steps"`
+	Persona     string  `json:"persona,omitempty"`
+	NoKeyless   bool    `json:"no_keyless,omitempty"` // don't fall back to the keyless model
 
 	// Shared with Blaze Desktop (its Settings › Models): the model you picked, and
 	// the model chosen per provider. Default nil or provider "auto" = Auto.
@@ -192,40 +193,48 @@ func (c *Config) SelectModel(provider, model string) error {
 	return c.Save()
 }
 
-// Key returns the provider's key: env var first, then keychain, then the file.
+// Keys is the shared key store (same as Blaze Desktop's).
+func Keys() *keystore.Store { return keystore.Open(Dir()) }
+
+// KeysChanged, when set, runs after a key is saved or removed (the account syncs it).
+var KeysChanged func(provider string)
+
+func keysChanged(provider string) {
+	if KeysChanged != nil && keystore.IsSynced(provider) {
+		KeysChanged(provider)
+	}
+}
+
+// Key returns the provider's main key: env var first, then the shared key store.
 func (c *Config) Key(provider string) string {
 	if p, ok := ProviderByID(provider); ok && p.Env != "" {
 		if v := strings.TrimSpace(os.Getenv(p.Env)); v != "" {
 			return v
 		}
 	}
-	if v, err := keyring.Get(service, provider); err == nil && v != "" {
-		return v
-	}
-	return c.Keys[provider]
+	return Keys().Main(provider)
 }
 
-// SetKey stores a key in the keychain when possible. Returns where it went.
+// SetKey stores a provider's main key. Returns where it went.
 func (c *Config) SetKey(provider, key string) (string, error) {
-	key = strings.TrimSpace(key)
-	if err := keyring.Set(service, provider, key); err == nil {
-		if c.Keys != nil {
-			delete(c.Keys, provider)
-		}
-		return "your system keychain", c.Save()
+	where, err := Keys().Set(provider, key)
+	if err == nil {
+		keysChanged(provider)
 	}
-	if c.Keys == nil {
-		c.Keys = map[string]string{}
-	}
-	c.Keys[provider] = key
-	return "~/.blaze/config.json (owner-only)", c.Save()
+	return where, err
 }
 
+// DeleteKey removes every key of a provider (main and the extras Blaze Desktop adds).
 func (c *Config) DeleteKey(provider string) {
-	_ = keyring.Delete(service, provider)
-	delete(c.Keys, provider)
-	_ = c.Save()
+	_ = Keys().SetAll(provider, nil)
+	keysChanged(provider)
 }
+
+// ExtraKeys are the provider's additional keys (Blaze Desktop's key ring).
+func (c *Config) ExtraKeys(provider string) []string { return Keys().Extras(provider) }
+
+// AllKeys is the key ring: the main key first, then the extras, without duplicates.
+func (c *Config) AllKeys(provider string) []string { return Keys().All(provider) }
 
 // HasAnyModel is true when at least one chain entry has what it needs.
 func (c *Config) HasAnyModel() bool {
