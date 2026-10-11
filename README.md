@@ -70,8 +70,8 @@ cap), each Build specialist in its own git worktree (or a copy of the folder) un
 more than the lead has (Plan lead → Plan specialists; Autopilot's budgets). When one reports back the main chat reviews its
 diff and applies or discards it; you can too with `/agents apply|reject NAME`.
 
-The prompt never goes away: while Blaze works you can keep typing on the working line, and Enter queues the message for its
-next turn (approvals and questions still take the keys while they are open). Handing work off ends the main turn at once.
+The prompt never goes away: while Blaze works the boxed chat bar stays under the working line (with the same "/" and "@"
+menus), and Enter queues what you type for its next turn (approvals and questions still take the keys while they are open). Handing work off ends the main turn at once.
 
 While working Blaze says what it is doing in plain words ("Reading main.go", "Running the tests"), never commands or code. A
 finished turn folds into one line, `Worked · 5 steps · 12s · ctrl+o to expand`; **Ctrl+O** at the prompt shows the exact
@@ -139,7 +139,7 @@ for one shell. The library is copied from Blaze Desktop with `scripts/sync-skill
 | **Shift+Tab** | cycle modes: Build·Auto → Build·Autopilot → **Plan** (look and propose, nothing changes; then approve the plan to run it) |
 | **Checklist** | for multi-step work Blaze keeps a live plan card (■ done · ▸ doing · □ to do) |
 | **Diffs** | every file write or edit shows a coloured diff with +/- counts |
-| `@path` | attach a file or folder to your message (Tab completes paths) |
+| `@path` | attach a file or folder to your message: `@` opens a files menu above the box (folders first, filtered as you type) |
 | `!command` | run a command yourself; Blaze sees the output |
 | `#note` | save a note to Blaze's memory |
 | `BLAZE.md` | project instructions loaded every session (`AGENTS.md` / `CLAUDE.md` also work; `~/.blaze/BLAZE.md` is global). `/init` writes one |

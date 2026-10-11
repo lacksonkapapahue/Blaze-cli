@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.8.2 — The real chat bar stays while Blaze works, and @ lists your files
+
+- **The composer box stays on screen during a turn.** Instead of the short "› type to queue a message" beside the working
+  line, the same boxed chat bar as the prompt sits under it, with the mode glyph, a caret and a footer. Type there, and
+  Enter queues the message for Blaze's next turn ("1 queued · Blaze reads it next"). Long lines scroll so the end stays in
+  view. It gives way while the reply streams and comes back with the next step. Terminals without colour or narrower
+  than 30 columns keep the one-line composer.
+- **"@" opens a files menu**, the same pop-up as "/": the folder's folders (first) and files with their sizes, filtered as
+  you type. Picking a folder lists what's inside it, and picking a file fills in `@path ` so you keep typing. Dotfiles
+  show once you type a dot, and `.git` never does. It works at the prompt and in the composer box during a turn.
+- In the composer box during a turn, "/" and "@" menus work like at the prompt: ↑ ↓ move, Tab or Enter fills in, Esc closes.
+
 ## v0.8.1 — Verified downloads and tidier releases
 
 - **Downloads are checked.** Every release now ships `SHA256SUMS`. `install.sh`, `install.ps1` and `blaze update` refuse a

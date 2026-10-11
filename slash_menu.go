@@ -2,9 +2,14 @@ package main
 
 // The "/" pop-up menu over the prompt, matching Blaze Desktop's composer menu:
 // commands with a one-line description, filtered as you type, and a skills
-// sub-menu under "/skills ".
+// sub-menu under "/skills ". "@" opens the files menu: the folder's files and
+// folders, filtered as you type; picking a folder lists what's inside it.
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/lacksonkapapahue/blaze-cli/internal/skillpack"
@@ -59,6 +64,10 @@ var skillActions = []ui.MenuItem{
 
 // slashMenu is the Editor's Menu callback.
 func slashMenu(line string) *ui.MenuSet {
+	i := strings.LastIndexAny(line, " \n\t")
+	if tok := line[i+1:]; strings.HasPrefix(tok, "@") {
+		return filesMenu(line[:i+1], tok[1:])
+	}
 	if !strings.HasPrefix(line, "/") {
 		return nil
 	}
@@ -146,4 +155,69 @@ func skillDesc(v skillpack.View) string {
 		return "off · " + d
 	}
 	return d
+}
+
+const filesMenuMax = 500 // entries read from one folder
+
+// filesMenu lists the folder named by frag ("src/ma" lists src/, filtered by "ma").
+// Each item turns the line into before + "@path": a folder ends in "/" so the menu
+// moves into it, a file ends in " " so the menu closes and you keep typing.
+func filesMenu(before, frag string) *ui.MenuSet {
+	i := strings.LastIndexAny(frag, `/\`)
+	dir, base := frag[:i+1], frag[i+1:] // i is -1 without a separator: dir "", base frag
+	look := dir
+	if look == "" {
+		look = "."
+	}
+	if strings.HasPrefix(look, "~") {
+		if h, err := os.UserHomeDir(); err == nil {
+			look = h + look[1:]
+		}
+	}
+	ents, err := os.ReadDir(look)
+	if err != nil {
+		return nil
+	}
+	var dirs, files []ui.MenuItem
+	for _, en := range ents {
+		nm := en.Name()
+		if nm == ".git" || (strings.HasPrefix(nm, ".") && !strings.HasPrefix(base, ".")) {
+			continue
+		}
+		info, err := os.Stat(filepath.Join(look, nm)) // follows symlinks
+		if err != nil {
+			continue
+		}
+		if info.IsDir() {
+			dirs = append(dirs, ui.MenuItem{Name: nm + "/", Desc: "folder", Insert: before + "@" + dir + nm + "/"})
+		} else {
+			files = append(files, ui.MenuItem{Name: nm, Desc: humanSize(info.Size()), Insert: before + "@" + dir + nm + " "})
+		}
+		if len(dirs)+len(files) >= filesMenuMax {
+			break
+		}
+	}
+	byName := func(a []ui.MenuItem) {
+		sort.SliceStable(a, func(i, j int) bool { return strings.ToLower(a[i].Name) < strings.ToLower(a[j].Name) })
+	}
+	byName(dirs)
+	byName(files)
+	all := append(dirs, files...)
+	title := "files"
+	if dir != "" {
+		title += " · " + dir
+	}
+	return &ui.MenuSet{Title: title, Items: ui.Rank(all, base, nil), Full: len(all)}
+}
+
+func humanSize(n int64) string {
+	switch {
+	case n < 1024:
+		return fmt.Sprintf("%d B", n)
+	case n < 1024*1024:
+		return fmt.Sprintf("%.1f KB", float64(n)/1024)
+	case n < 1024*1024*1024:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1024*1024))
+	}
+	return fmt.Sprintf("%.1f GB", float64(n)/(1024*1024*1024))
 }
