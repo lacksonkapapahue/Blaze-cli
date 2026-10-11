@@ -12,6 +12,7 @@ import (
 	"github.com/lacksonkapapahue/blaze-cli/internal/config"
 	"github.com/lacksonkapapahue/blaze-cli/internal/learn"
 	"github.com/lacksonkapapahue/blaze-cli/internal/llm"
+	"github.com/lacksonkapapahue/blaze-cli/internal/steps"
 	"github.com/lacksonkapapahue/blaze-cli/internal/sysinfo"
 	"github.com/lacksonkapapahue/blaze-cli/internal/tools"
 	"github.com/lacksonkapapahue/blaze-cli/internal/ui"
@@ -24,6 +25,7 @@ type Agent struct {
 	Quiet   bool // one-shot / scheduled: no spinner
 	spin    *ui.Spinner
 	diffed  bool // a diff was drawn for the current tool call
+	cur     *ui.ActStep
 
 	// Approval is the approval mode: "auto" (risky actions ask first) or
 	// "autopilot" (nothing asks; catastrophic actions stay blocked; questions get
@@ -37,7 +39,20 @@ type Agent struct {
 	Handle      func(ctx context.Context, name, args string) (string, bool)
 	ReadOnly    func(name string) bool
 	ExtraSystem func() string
+
+	// Handoff, when set, is asked after a step's tool calls ran: true ends the turn
+	// at once (the main chat handed the work to agents and stays free, v0.7.0).
+	Handoff func(calls []llm.ToolCall) bool
+	// ShowSteps prints a plain line for each finished step (BLAZE_STEPS=all);
+	// otherwise a turn shows only the working line and collapses to "Worked · N steps".
+	ShowSteps bool
 }
+
+// HandoffLine is said when the model handed work off without a word.
+const HandoffLine = "On it. I'll report back when it's done."
+
+// complete is the model call (a var so tests can fake it).
+var complete = llm.Complete
 
 // Autopilot reports whether the approval mode is Autopilot.
 func (a *Agent) Autopilot() bool { return a.Approval == "autopilot" }
@@ -61,6 +76,10 @@ func New(cfg *config.Config, info *sysinfo.Info, cwd string, yolo bool) *Agent {
 		if a.Quiet {
 			return
 		}
+		if a.cur != nil { // kept for Ctrl+O; no code while working
+			a.cur.DiffPath, a.cur.Before, a.cur.After = path, before, after
+			return
+		}
 		a.spin.Stop()
 		ui.Diff(path, before, after)
 		a.diffed = true
@@ -80,8 +99,11 @@ func New(cfg *config.Config, info *sysinfo.Info, cwd string, yolo bool) *Agent {
 		if a.Quiet {
 			return
 		}
-		a.spin.Set(s)
+		if p := steps.PlainStatus(s); p != "" {
+			a.spin.Set(p) // tools report "Running: <command>"; only plain words show
+		}
 	}
+	a.ShowSteps = os.Getenv("BLAZE_STEPS") == "all"
 	return a
 }
 
@@ -136,10 +158,24 @@ RULES
 }
 
 // Ask runs one user turn to completion and returns the final text.
-func (a *Agent) Ask(ctx context.Context, prompt string) (string, error) {
+func (a *Agent) Ask(ctx context.Context, prompt string) (_ string, err error) {
 	a.History = append(a.History, llm.Message{Role: "user", Content: prompt})
 	a.trim()
 	started := time.Now()
+	act := &ui.Activity{}
+	defer func() {
+		a.cur = nil
+		act.Seconds = time.Since(started).Seconds()
+		if a.Quiet {
+			return
+		}
+		if len(act.Steps) > 0 {
+			ui.SetActivity(act) // Ctrl+O expands the last turn that did something
+		}
+		if err != nil && len(act.Steps) > 0 {
+			ui.Worked("", len(act.Steps), time.Since(started))
+		}
+	}()
 	var final string
 	maxSteps, deadline := a.Cfg.MaxSteps, time.Time{}
 	if maxSteps <= 0 {
@@ -168,7 +204,7 @@ func (a *Agent) Ask(ctx context.Context, prompt string) (string, error) {
 			}
 			md.Post = func() { a.spin.Start("writing") }
 		}
-		r, err := llm.Complete(ctx, a.Cfg, msgs, all, func(s string) {
+		r, err := complete(ctx, a.Cfg, msgs, all, func(s string) {
 			if a.Quiet {
 				return
 			}
@@ -199,7 +235,7 @@ func (a *Agent) Ask(ctx context.Context, prompt string) (string, error) {
 				continue
 			}
 			if !a.Quiet {
-				ui.Footer(r.Route, time.Since(started))
+				ui.Worked(r.Route, len(act.Steps), time.Since(started))
 			}
 			a.Reflect(ctx) // end-of-turn learning check (learn.go)
 			return final, nil
@@ -208,19 +244,42 @@ func (a *Agent) Ask(ctx context.Context, prompt string) (string, error) {
 			if ctx.Err() != nil {
 				return "", ctx.Err()
 			}
+			// While working only plain words show (Blaze Desktop's phrases); the exact
+			// call, its output and any diff wait behind Ctrl+O.
+			plain := steps.Describe(tc.Function.Name, tc.Function.Arguments)
 			if !a.Quiet {
-				a.spin.Start(describe(tc))
+				a.spin.Start(plain)
 			}
 			t0 := time.Now()
 			a.diffed = false
+			st := ui.ActStep{Plain: plain, Detail: steps.Detail(tc.Function.Name, tc.Function.Arguments)}
+			a.cur = &st
 			res := a.exec(ctx, tc.Function.Name, tc.Function.Arguments)
+			a.cur = nil
 			a.spin.Stop()
-			quietStep := tc.Function.Name == "todo_write" || (a.diffed && succeeded(res))
-			if !a.Quiet && !quietStep {
-				ui.StepDone(succeeded(res), describe(tc), summarize(res), time.Since(t0))
+			st.Result, st.OK, st.Took = res, succeeded(res), time.Since(t0)
+			act.Steps = append(act.Steps, st)
+			if !a.Quiet && a.ShowSteps && tc.Function.Name != "todo_write" {
+				ui.StepDone(st.OK, plain, "", st.Took)
 			}
 			a.printLearned()
 			a.History = append(a.History, llm.Message{Role: "tool", ToolCallID: tc.ID, Name: tc.Function.Name, Content: res})
+		}
+		// Handing work off ends the turn at once: the user gets a short line and the
+		// prompt is theirs again while the agents work (Blaze Desktop's rule).
+		if a.Handoff != nil && a.Handoff(r.ToolCalls) {
+			final = r.Text
+			if strings.TrimSpace(final) == "" {
+				final = HandoffLine
+				a.History = append(a.History, llm.Message{Role: "assistant", Content: final})
+				if !a.Quiet {
+					ui.Println("\n  " + ui.Body(final))
+				}
+			}
+			if !a.Quiet {
+				ui.Worked(r.Route, len(act.Steps), time.Since(started))
+			}
+			return final, nil
 		}
 	}
 	return final, fmt.Errorf("stopped after %d steps without finishing; say \"continue\" to keep going", maxSteps)
@@ -282,6 +341,9 @@ func (a *Agent) exec(ctx context.Context, name, args string) string {
 // gate is the approval for risky actions. Auto asks; Autopilot approves everything
 // except the catastrophic blocklist (wiping disks, the system or the home folder).
 func (a *Agent) gate(title, detail string) bool {
+	if st := a.cur; st != nil && !a.Quiet {
+		defer a.spin.Start(st.Plain) // the step goes on: bring the working line (and the composer) back
+	}
 	if a.Autopilot() {
 		if why := tools.Catastrophic(title, detail); why != "" {
 			if !a.Quiet {
@@ -292,7 +354,7 @@ func (a *Agent) gate(title, detail string) bool {
 		}
 		if !a.Quiet {
 			a.spin.Stop()
-			ui.StepDone(true, "Autopilot approved: "+strings.TrimSuffix(title, "?"), summarize(detail), 0)
+			ui.StepDone(true, "Autopilot approved: "+strings.TrimSuffix(title, "?"), "", 0) // the command itself waits behind Ctrl+O
 		}
 		return true
 	}

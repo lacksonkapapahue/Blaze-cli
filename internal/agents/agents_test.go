@@ -73,7 +73,7 @@ func newHarness(t *testing.T, cap int, dir string) *harness {
 	h := &harness{f: newFake()}
 	h.m = New(Runtime{
 		Complete: h.f.complete,
-		Tools:    func([]string) []llm.Tool { return []llm.Tool{AskTool()} },
+		Tools:    func(*Agent) []llm.Tool { return []llm.Tool{AskTool()} },
 		Known:    func() []string { return []string{"file_read", "ask_user"} },
 		Exec: func(ctx context.Context, a *Agent, name, args string) string {
 			if h.execGate != nil {

@@ -171,6 +171,7 @@ func Step(s string) { Println("  " + Weak("·") + " " + Sub(s)) }
 // ---------- input ----------
 
 func ReadLine(prompt string) (string, error) {
+	defer holdKeys()()
 	Printf("%s", prompt)
 	if quietSession() {
 		return readEchoed()
@@ -202,6 +203,7 @@ func wrapLines(detail string, lines []string) []string {
 
 // Secret reads a line without echo when possible (API keys).
 func Secret(prompt string) string {
+	defer holdKeys()()
 	Printf("%s", prompt)
 	if s, ok := readHidden(); ok {
 		Println("")

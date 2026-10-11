@@ -200,6 +200,7 @@ func spinLine(i int, txt string, el time.Duration) string {
 			tail += Weak("  ·  ") + st
 		}
 	}
+	tail += typeaheadTail()
 	room := W - 6 - width(tail)
 	if room < 8 {
 		tail, room = "", W-6

@@ -106,18 +106,18 @@ func wire(a *agent.Agent, interactive bool) *bgAgents {
 		ts = append(ts, notifyTool())
 		return append(ts, getConns().Tools()...)
 	}
-	a.ReadOnly = func(name string) bool { return getConns().ReadOnly(name) }
+	a.ReadOnly = func(name string) bool { return getConns().ReadOnly(name) || (bg != nil && leadPlanAllows[name]) }
 	a.ExtraSystem = func() string {
 		s := ""
 		if bg != nil {
-			s += agents.Delegation
+			s += agents.Delegation + agents.Orchestration + mainChat
 		}
 		return s + getConns().PromptBlock()
 	}
 	a.Handle = func(ctx context.Context, name, args string) (string, bool) {
 		switch {
 		case bg != nil && agents.IsMainTool(name):
-			return bg.m.HandleMainTool(name, args, bg.conv, a.Env.Shell.Cwd()).Result, true
+			return bg.lead(name, args), true
 		case bg != nil && name == "update_blaze":
 			a.StopSpinner()
 			return selfUpdate(bg), true
@@ -128,8 +128,26 @@ func wire(a *agent.Agent, interactive bool) *bgAgents {
 		}
 		return "", false
 	}
+	if bg != nil {
+		a.Handoff = bg.handoff
+	}
 	return bg
 }
+
+// leadPlanAllows are the agent tools a Plan-mode lead keeps: it may look at agents and
+// brief Plan specialists (they only scout), not start Build work or apply changes.
+var leadPlanAllows = map[string]bool{"list_agents": true, "dispatch_specialist": true, "check_specialist": true, "message_specialist": true, "cancel_specialist": true}
+
+// mainChat keeps the main model light: it talks, plans and steers, and hands real
+// work to agents and specialists so the user can always reach it (v0.7.0).
+const mainChat = `
+YOU ARE THE MAIN CHAT (always reachable)
+The user can type to you at any time, even while you or your agents work: a message sent while you are busy waits for your next turn, so keep your own turns short.
+- Talk, answer, plan and steer yourself. Work that needs more than two or three tool calls (builds, test runs, refactors, installs, research across pages) goes to a background agent, or to specialists when it splits into independent parts.
+- Hand off and end your turn in the same reply with one short line. Never wait for or poll an agent; its result comes back to you as a platform message.
+- When the user asks how it's going, answer from list_agents / check_specialist. When they change their mind, steer with message_agent / message_specialist, or cancel.
+- When you describe what you or an agent is doing, use plain words ("running the tests", "reading the config"), not commands or code.
+`
 
 // ---------------- update_blaze ----------------
 
