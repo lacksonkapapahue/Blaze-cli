@@ -48,7 +48,7 @@ func usage() {
 	ui.Box(ui.AccentLabel("flags"), []string{
 		ui.Ink("--autopilot") + ui.Sub("       nothing asks; catastrophic actions stay blocked (--yolo too)"),
 		ui.Ink("--plan") + ui.Sub("            start in Plan mode: look and propose, change nothing"),
-		ui.Ink("--model p/model") + ui.Sub("   try this model first"),
+		ui.Ink("--model p/model") + ui.Sub("   try this model first (this run only)"),
 		ui.Ink("-c, --continue") + ui.Sub("    pick up this folder's last conversation"),
 	})
 }
@@ -79,8 +79,12 @@ func main() {
 	}
 	cfg := config.Load()
 	if model != "" {
-		prov, m, _ := strings.Cut(model, "/")
-		cfg.Chain = append([]config.Entry{{Provider: prov, Model: m}}, cfg.Chain...)
+		e, err := parseModel(cfg, model)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "blaze: --model: "+err.Error())
+			os.Exit(2)
+		}
+		cfg.Override = &e // this run only; /model saves a choice
 	}
 	cmd := ""
 	if len(rest) > 0 {
@@ -216,18 +220,6 @@ func accountCmd(cmd string, args []string) error {
 
 var slashCmds = []string{"/agents", "/auto", "/autopilot", "/build", "/clear", "/compact", "/connect", "/disconnect", "/doctor", "/exit", "/help", "/init", "/jobs", "/learn", "/login", "/logout", "/model", "/new", "/notify", "/pc", "/plan", "/quit", "/resume", "/schedule", "/setup", "/skills", "/update", "/whoami", "/yolo"}
 
-func modelName(a *agent.Agent) string {
-	for _, e := range a.Cfg.RouteChain() {
-		if p, ok := config.ProviderByID(e.Provider); ok {
-			if e.Model != "" {
-				return p.Name + " · " + e.Model
-			}
-			return p.Name
-		}
-	}
-	return "no model yet"
-}
-
 func repl(a *agent.Agent, bg *bgAgents, in sysinfo.Info, cont bool) {
 	ui.Welcome(version, modelName(a), in.OSName+" · "+in.Shell+" · "+shortPath(a.Env.Root),
 		ui.Weak("/ commands  ·  @ files  ·  ! shell  ·  # remember  ·  ⇧tab modes  ·  /agents"))
@@ -240,6 +232,7 @@ func repl(a *agent.Agent, bg *bgAgents, in sysinfo.Info, cont bool) {
 	if cont {
 		resume(a)
 	}
+	menuCfg = a.Cfg
 	ed := &ui.Editor{
 		HistoryFile: filepath.Join(config.Dir(), "history"),
 		Commands:    slashCmds,
@@ -505,7 +498,7 @@ func help() {
 		ui.Accent("/auto") + ui.Sub("      risky actions ask   ") + ui.Accent("/autopilot") + ui.Sub(" nothing asks (catastrophic stays blocked)"),
 		ui.Accent("/agents") + ui.Sub("    background agents: list · <name> · msg · cancel · resume · discard · new"),
 		ui.Accent("/login") + ui.Sub("     Blaze account   ") + ui.Accent("/whoami") + ui.Sub("   ") + ui.Accent("/logout") + ui.Sub("   ") + ui.Accent("/connect") + ui.Sub(" [app]"),
-		ui.Accent("/model") + ui.Sub("     show or switch models"),
+		ui.Accent("/model") + ui.Sub("     pick the model Blaze uses (saved)"),
 		ui.Accent("/skills") + ui.Sub("    skill library: list · <name> · on|off|delete|restore <name>   ") + ui.Accent("/learn") + ui.Sub(" [on|off]"),
 		ui.Accent("/jobs") + ui.Sub("      background jobs   ") + ui.Accent("/schedule") + ui.Sub(" scheduled jobs"),
 		ui.Accent("/pc") + ui.Sub("        this PC   ") + ui.Accent("/doctor") + ui.Sub(" check everything   ") + ui.Accent("/setup"),
@@ -609,18 +602,7 @@ func slash(a *agent.Agent, bg *bgAgents, line string, run func(string)) bool {
 	case "/schedule":
 		ui.Println(sched.ListText())
 	case "/model":
-		if len(f) > 1 {
-			prov, m, _ := strings.Cut(f[1], "/")
-			a.Cfg.Chain = append([]config.Entry{{Provider: prov, Model: m}}, a.Cfg.Chain...)
-			ui.Step("Using " + f[1] + " first for this session.")
-		} else {
-			var rows []string
-			for _, e := range a.Cfg.Chain {
-				rows = append(rows, ui.Ink(e.Provider)+ui.Weak(" "+e.Model))
-			}
-			ui.Numbered(rows)
-			ui.Println("  " + ui.Weak("/model provider/model to try one first"))
-		}
+		modelCmd(a, f[1:])
 	default:
 		help()
 	}

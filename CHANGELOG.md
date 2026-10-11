@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.6.2 — No more stray ^[[O; /model is saved
+
+- **Fixed a literal `^[[O` appearing on screen** (e.g. under "Resumed 2 messages" after `blaze -c`). That is the
+  terminal's focus-out report: Blaze turns focus reporting on so it can notify you when you're looking elsewhere, but
+  outside the prompt the terminal was in normal (cooked) mode and echoed the report before Blaze read it. While focus
+  reporting is on, the terminal now stays in Blaze's quiet mode (no echo, no line buffering; Ctrl-C still stops a task)
+  for the whole session, so reports are always read and dropped, never shown. Line prompts (`/login` email, agent
+  questions) echo what you type themselves; the terminal is put back exactly as it was on exit and before a restart.
+  Desktop notifications when the terminal is unfocused work as before.
+- **`/model` is now saved.** `/model provider/model` makes that model the one Blaze uses from now on, also after
+  `/exit` and in the banner, and keeps the rest of your chain behind it as fallback. It is stored the way Blaze
+  Desktop's model picker stores it (`default` + `model_for`, and first in the chain), so both apps agree;
+  `/model auto` goes back to plain chain order. `--model` stays a one-off for that run and is never saved.
+- **`/model ` opens a picker** in the slash menu with your models (↑ ↓, Enter), plus `auto`. `/model` alone lists
+  them with the one in use marked.
+- OpenRouter ids that contain a slash work: `/model nvidia/nemotron-3.5-lightning:free` picks it on OpenRouter when
+  OpenRouter is set up (a `:free` id, an id already in your chain, or an unknown prefix); `openrouter/vendor/model`
+  always does.
+- Saving `config.json` keeps settings this version doesn't know (Blaze Desktop's routing, daily cap, custom
+  provider…) instead of dropping them.
+
 ## v0.6.1 — Slash menu like Blaze Desktop
 
 - **Type `/` and the commands pop up above the input box**, each with a one-line description, the way Blaze Desktop's

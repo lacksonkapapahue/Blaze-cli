@@ -13,20 +13,23 @@ import (
 // meanwhile are kept for the prompt (they show up in it when it reopens), and the
 // terminal's focus reports arrive at once instead of being echoed as ^[[O. It
 // returns the function that puts the terminal back.
-func Quiet() func() {
+func Quiet() func() { restore, _ := quiet(); return restore }
+
+// quiet is Quiet that also says whether the mode was switched.
+func quiet() (func(), bool) {
 	if !StdinTTY() || !IsTTY() {
-		return func() {}
+		return func() {}, false
 	}
 	fd := int(os.Stdin.Fd())
 	old, err := unix.IoctlGetTermios(fd, ioctlGet)
 	if err != nil {
-		return func() {}
+		return func() {}, false
 	}
 	t := *old
 	t.Lflag &^= unix.ECHO | unix.ICANON
 	t.Cc[unix.VMIN], t.Cc[unix.VTIME] = 1, 0
 	if unix.IoctlSetTermios(fd, ioctlSet, &t) != nil {
-		return func() {}
+		return func() {}, false
 	}
-	return func() { _ = unix.IoctlSetTermios(fd, ioctlSet, old) }
+	return func() { _ = unix.IoctlSetTermios(fd, ioctlSet, old) }, true
 }
