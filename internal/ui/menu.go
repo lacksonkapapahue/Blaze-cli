@@ -168,3 +168,92 @@ func drawMenu(m *MenuSet, idx, bw int) []string {
 	out = append(out, "  "+hair("└─ ")+Weak(hint)+" "+hair(strings.Repeat("─", max(0, bw-width(hint)-5))+"┘"))
 	return out
 }
+
+// PickList shows rows as a list (like the setup picker): ↑ ↓ move, Enter picks, Esc
+// cancels. It returns the picked index, or -1. Long lists scroll.
+func PickList(title string, rows []string, def int) int {
+	if len(rows) == 0 {
+		return -1
+	}
+	if def < 0 || def >= len(rows) {
+		def = 0
+	}
+	if !StdinTTY() || !IsTTY() {
+		if title != "" {
+			Println("  " + Ink(title))
+		}
+		Numbered(rows)
+		ans, err := ReadLine("  " + Ink("Which one? ") + Weak(fmt.Sprintf("number · Enter = %d ", def+1)))
+		if err != nil {
+			return -1
+		}
+		ans = strings.TrimSpace(ans)
+		if ans == "" {
+			return def
+		}
+		var n int
+		if _, err := fmt.Sscan(ans, &n); err == nil && n >= 1 && n <= len(rows) {
+			return n - 1
+		}
+		return -1
+	}
+	cur := def
+	W := termWidth()
+	h := min(len(rows), 10)
+	start := 0
+	if title != "" {
+		Println("  " + Ink(title))
+	}
+	draw := func(first bool) {
+		if !first {
+			Printf("\x1b[%dA", h+1)
+		}
+		if cur < start {
+			start = cur
+		}
+		if cur >= start+h {
+			start = cur - h + 1
+		}
+		for i := start; i < start+h; i++ {
+			ptr, row := "  ", Body(rows[i])
+			if i == cur {
+				ptr, row = Accent("▸ "), Ink(rows[i])
+			}
+			line := "  " + ptr + row
+			if width(line) > W-1 {
+				line = "  " + ptr + clip(ansi.ReplaceAllString(rows[i], ""), W-6)
+			}
+			Printf("\r\x1b[2K%s\r\n", line)
+		}
+		hint := "↑ ↓ move · enter pick · esc cancel"
+		if len(rows) > h {
+			hint = fmt.Sprintf("%d/%d · ", cur+1, len(rows)) + hint
+		}
+		Printf("\r\x1b[2K  %s\r\n", Weak(hint))
+	}
+	Printf("\x1b[?25l")
+	draw(true)
+	canceled := false
+	rawKeys(func(k string) bool {
+		switch k {
+		case "up", "k":
+			cur = (cur + len(rows) - 1) % len(rows)
+		case "down", "j", "tab":
+			cur = (cur + 1) % len(rows)
+		case "enter", "space":
+			return true
+		case "esc", "ctrl-c", "q":
+			canceled = true
+			return true
+		}
+		draw(false)
+		return false
+	})
+	// settle on the choice only
+	Printf("\x1b[%dA\r\x1b[J\x1b[?25h", h+1)
+	if canceled {
+		return -1
+	}
+	Println("  " + Accent("■ ") + Ink(ansi.ReplaceAllString(rows[cur], "")))
+	return cur
+}

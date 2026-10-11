@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode"
 
 	"golang.org/x/term"
@@ -28,6 +29,7 @@ type Editor struct {
 	Footer      func(line string) string   // dim line under the box
 	OnShiftTab  func()                     // cycle modes
 	Menu        func(line string) *MenuSet // pop-up menu above the box for this line (nil = none)
+	DoubleEsc   string                     // Esc twice on an empty prompt submits this ("/rewind"); "" = off
 
 	history []string
 	loaded  bool
@@ -46,6 +48,7 @@ type Editor struct {
 	menuIdx  int
 	menuLine string // the line the highlight belongs to
 	menuOff  string // Esc closed the menu for exactly this line
+	lastEsc  time.Time
 }
 
 // StdinTTY is true when we can put the keyboard in raw mode.
@@ -238,7 +241,11 @@ func (e *Editor) key(r rune, err error) (string, bool, error) {
 			e.tab()
 		}
 	case 27:
-		e.escape()
+		if e.escape() && e.DoubleEsc != "" {
+			e.render(true)
+			Printf("\r\n")
+			return e.DoubleEsc, true, nil
+		}
 	default:
 		if r >= 32 || r == '\t' {
 			e.insert([]rune{r})
@@ -443,10 +450,19 @@ func (e *Editor) tab() {
 	e.curRow = 0
 }
 
-func (e *Editor) escape() {
+// escape handles a key sequence starting with Esc. It reports a lone Esc pressed
+// twice quickly on an empty prompt.
+func (e *Editor) escape() (double bool) {
 	if In.Buffered() == 0 {
 		e.menuOff = string(e.buf) // a lone Esc key closes the menu
-		return
+		if len(e.buf) == 0 {
+			if time.Since(e.lastEsc) < 800*time.Millisecond {
+				e.lastEsc = time.Time{}
+				return true
+			}
+			e.lastEsc = time.Now()
+		}
+		return false
 	}
 	r, _, _ := In.ReadRune()
 	switch r {
@@ -471,7 +487,12 @@ func (e *Editor) escape() {
 		e.kill(e.wordLeft(), e.pos)
 	case 'd':
 		e.kill(e.pos, e.wordRight())
+	case 27: // Esc Esc arrived together
+		if len(e.buf) == 0 && In.Buffered() == 0 {
+			return true
+		}
 	}
+	return false
 }
 
 func (e *Editor) csi(intro rune, seq string) {

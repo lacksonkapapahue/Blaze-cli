@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lacksonkapapahue/blaze-cli/internal/checkpoint"
 	"github.com/lacksonkapapahue/blaze-cli/internal/config"
 	"github.com/lacksonkapapahue/blaze-cli/internal/learn"
 	"github.com/lacksonkapapahue/blaze-cli/internal/llm"
@@ -45,6 +46,16 @@ type Agent struct {
 	// Handoff, when set, is asked after a step's tool calls ran: true ends the turn
 	// at once (the main chat handed the work to agents and stays free, v0.7.0).
 	Handoff func(calls []llm.ToolCall) bool
+	// Checkpoints, when set, saves each file's prior content before Blaze changes it
+	// (v0.8.0, /rewind). The host opens a turn per message (Begin/End).
+	Checkpoints *checkpoint.Session
+	// ChangePaths, when set, names the files a host tool is about to change (applying
+	// a specialist's changes), so they are checkpointed too.
+	ChangePaths func(name, args string) []string
+	// Dropped counts messages trim cut from the front, so a checkpoint's position in
+	// the conversation stays valid.
+	Dropped int
+
 	// ShowSteps prints a plain line for each finished step (BLAZE_STEPS=all);
 	// otherwise a turn shows only the working line and collapses to "Worked · N steps".
 	ShowSteps bool
@@ -332,6 +343,12 @@ func (a *Agent) exec(ctx context.Context, name, args string) string {
 			}
 		}
 	}
+	if a.Checkpoints != nil {
+		if paths := a.changePaths(name, args); len(paths) > 0 {
+			a.Checkpoints.Before(paths)
+			defer a.Checkpoints.After(paths)
+		}
+	}
 	if a.Handle != nil {
 		if res, ok := a.Handle(ctx, name, args); ok {
 			if strings.TrimSpace(res) == "" {
@@ -435,9 +452,10 @@ func (a *Agent) trim() {
 		cut++
 	}
 	a.SetHistory(a.History[cut:])
+	a.Dropped += cut
 }
 
-func (a *Agent) Reset() { a.SetHistory(nil); tools.ResetTodos() }
+func (a *Agent) Reset() { a.SetHistory(nil); a.Dropped = 0; tools.ResetTodos() }
 
 // push appends to the history. Only the agent's own goroutine writes it; the lock
 // lets background agents read it (SystemPrompt) while a turn runs.

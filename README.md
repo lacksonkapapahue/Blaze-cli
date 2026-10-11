@@ -63,7 +63,7 @@ another word, so picking one opens the next menu. The same menus work in the box
 | `/update` | `--force` (reinstall the newest build) |
 | `@` | the folder's folders and files; picking a folder lists what's inside it |
 
-Commands with nothing to choose: `/clear` `/resume` `/compact` `/init` `/plan` `/build` `/auto` `/autopilot` `/jobs`
+Commands with nothing to choose: `/clear` `/rewind` (or Esc twice; it lists your messages) `/undo` `/resume` `/compact` `/init` `/plan` `/build` `/auto` `/autopilot` `/jobs`
 `/schedule` `/whoami` `/logout` `/notify [text]` `/pc` `/doctor` `/setup` `/help` `/exit`.
 
 ### Modes (same as Blaze Desktop)
@@ -99,6 +99,30 @@ menus), and Enter queues what you type for its next turn (approvals and question
 While working Blaze says what it is doing in plain words ("Reading main.go", "Running the tests"), never commands or code. A
 finished turn folds into one line, `Worked · 5 steps · 12s · ctrl+o to expand`; **Ctrl+O** at the prompt shows the exact
 commands, output and diffs, and hides them again. `BLAZE_STEPS=all` also prints a plain line per finished step.
+
+### Checkpoints and rewind (like Claude Code)
+Every message you send is a checkpoint. Before Blaze writes, edits or deletes a file it keeps the file's old content (or
+notes that it didn't exist), so you can go back.
+
+- **`/rewind`** (or **Esc twice** on an empty prompt) lists your messages, newest first, with the time and how many files
+  each one changed. Pick one with ↑ ↓ and Enter, then choose what to put back:
+  - **Code and chat**: files go back to how they were before that message, and the chat goes back to just before it. Your
+    message comes back in the prompt so you can change it and send it again.
+  - **Chat only**: the conversation goes back; files stay as they are now.
+  - **Code only**: files go back; the conversation stays.
+- **`/undo`** rewinds the last message's code and chat in one step.
+- Files Blaze created are removed; files it deleted come back.
+- **Your own edits are safe.** If a file changed outside Blaze since the checkpoint (you edited it, or another program did),
+  Blaze lists it and asks: keep your changes, overwrite them, or cancel.
+- **In a git repo, shell commands are covered too.** At the start and end of each message Blaze takes a lightweight snapshot
+  of the working tree (a git tree kept under `refs/blaze/checkpoints/…`, written with a private index), so a rewind also
+  undoes what commands like formatters or code generators changed. Your index, branch, stash and files are never touched.
+  Outside a git repo only Blaze's own file edits are tracked, and `/rewind` says so.
+- Specialists' worktrees aren't tracked; when their changes are applied, they count as a change in that message.
+- Checkpoints live in `~/.blaze/cli/checkpoints/` (one folder per chat; the same content is stored once). Files over 5 MB
+  are noted but not copied. Chats untouched for 30 days are pruned. `/clear` starts fresh checkpoints; `blaze -c` and
+  `/resume` pick up the folder's last ones; after `/compact` older messages can rewind code only. `BLAZE_CHECKPOINTS=off`
+  turns them off.
 
 ### Account and connectors
 `blaze login` signs in through Blaze's sign-in service (`https://blaze-auth.blaze-app.workers.dev`): email + password, or
@@ -167,6 +191,7 @@ for one shell. The library is copied from Blaze Desktop with `scripts/sync-skill
 | `#note` | save a note to Blaze's memory |
 | `BLAZE.md` | project instructions loaded every session (`AGENTS.md` / `CLAUDE.md` also work; `~/.blaze/BLAZE.md` is global). `/init` writes one |
 | `/clear` | new conversation on a freshly cleared screen (scrollback too) · `/compact` summarise the chat to free context · `/resume` or `blaze -c` continues this folder's last chat |
+| `/rewind` · Esc Esc | go back to before a message: restore code, chat or both · `/undo` rewinds the last one |
 
 ### Keys at the prompt
 | Key | Does |
@@ -178,6 +203,7 @@ for one shell. The library is copied from Blaze Desktop with `scripts/sync-skill
 | Backspace · Delete · Ctrl-W · Ctrl-U · Ctrl-K · Ctrl-Y | edit, delete word, cut to start / end, paste back |
 | Ctrl-L | clear the screen |
 | Ctrl-C | clear the line; on an empty line, twice to quit · Ctrl-D quits |
+| Esc Esc | on an empty line: `/rewind` |
 
 Pasting multi-line text keeps the newlines (shown as ↵) and doesn't send until you press Enter.
 Approval prompts and the setup picker use ← → / ↑ ↓, Space and Enter.
@@ -204,7 +230,7 @@ Risky commands (sudo, rm -rf, format, registry edits, force-push, reset --hard),
 project folder, installs and deletes ask first.
 
 ## Files
-`~/.blaze/` (or `BLAZE_HOME`): `config.json`, `blaze.db` (memories + skills index, shared with Blaze Desktop), `skills/` (+ `.bundled.json`), `desktop.json` (shared settings such as `learn.off`), `learn-workflows.json`, `schedule.json`, `logs/`, `venv/`.
+`~/.blaze/` (or `BLAZE_HOME`): `config.json`, `blaze.db` (memories + skills index, shared with Blaze Desktop), `skills/` (+ `.bundled.json`), `desktop.json` (shared settings such as `learn.off`), `learn-workflows.json`, `schedule.json`, `logs/`, `venv/`, `cli/checkpoints/` (rewind).
 
 ## Memory (shared with Blaze Desktop)
 Since v0.6.0 memories live in `blaze.db`, the same SQLite file Blaze Desktop (v0.5.1+) uses, so a fact saved in

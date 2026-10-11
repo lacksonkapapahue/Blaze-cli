@@ -32,6 +32,8 @@ var slashMenuCmds = []slashCmd{
 	{"/clear", "Clear this chat and start fresh", false},
 	{"/resume", "Reload this folder's last conversation", false},
 	{"/compact", "Summarise the chat to free up context", false},
+	{"/rewind", "Go back to before a message: code, chat or both (Esc Esc)", false},
+	{"/undo", "Rewind the last message's code and chat", false},
 	{"/init", "Write BLAZE.md: how this project builds, tests, runs", false},
 	{"/model", "Pick the model Blaze uses (saved for next time)", true},
 	{"/skills", "Use one of your skills", true},

@@ -233,7 +233,7 @@ func accountCmd(cmd string, args []string) error {
 	return nil
 }
 
-var slashCmds = []string{"/agents", "/auto", "/autopilot", "/build", "/clear", "/compact", "/connect", "/disconnect", "/doctor", "/exit", "/help", "/init", "/jobs", "/keys", "/learn", "/login", "/logout", "/mcp", "/model", "/new", "/notify", "/pc", "/plan", "/quit", "/resume", "/schedule", "/setup", "/skills", "/update", "/whoami", "/yolo"}
+var slashCmds = []string{"/agents", "/auto", "/autopilot", "/build", "/clear", "/compact", "/connect", "/disconnect", "/doctor", "/exit", "/help", "/init", "/jobs", "/keys", "/learn", "/login", "/logout", "/mcp", "/model", "/new", "/notify", "/pc", "/plan", "/quit", "/resume", "/rewind", "/schedule", "/setup", "/skills", "/undo", "/update", "/whoami", "/yolo"}
 
 // welcomeWhere is the start screen's context line (OS · shell · folder), kept so
 // /clear can draw the same start screen again.
@@ -255,6 +255,7 @@ func repl(a *agent.Agent, bg *bgAgents, in sysinfo.Info, cont bool) {
 	if cont {
 		resume(a)
 	}
+	openCheckpoints(a, cont)
 	menuCfg = a.Cfg
 	ed := &ui.Editor{
 		HistoryFile: filepath.Join(config.Dir(), "history"),
@@ -263,6 +264,7 @@ func repl(a *agent.Agent, bg *bgAgents, in sysinfo.Info, cont bool) {
 		Placeholder: "Ask anything, or give a task",
 		Boxed:       true,
 		OnShiftTab:  func() { cycleMode(a) },
+		DoubleEsc:   "/rewind",
 	}
 	ed.Glyph = func(line string) string {
 		switch {
@@ -315,8 +317,12 @@ func repl(a *agent.Agent, bg *bgAgents, in sysinfo.Info, cont bool) {
 			}
 		}
 	}()
+	typedNext := "" // what the user typed for the next run (attachments aside), for /rewind
 	var run func(prompt string)
 	run = func(prompt string) {
+		typed := typedNext
+		typedNext = ""
+		turn := beginTurn(a, typed, prompt)
 		ctx, c := context.WithCancel(context.Background())
 		mu.Lock()
 		cancel = c
@@ -326,6 +332,7 @@ func repl(a *agent.Agent, bg *bgAgents, in sysinfo.Info, cont bool) {
 		_, err := a.Ask(ctx, prompt)
 		ed.Keep(ui.StopTypeahead())
 		restore()
+		endTurn(a, turn)
 		mu.Lock()
 		cancel = nil
 		mu.Unlock()
@@ -427,6 +434,10 @@ func repl(a *agent.Agent, bg *bgAgents, in sysinfo.Info, cont bool) {
 			}
 			continue
 		case strings.HasPrefix(line, "/"):
+			if f := strings.Fields(line); f[0] == "/rewind" || f[0] == "/undo" || f[0] == "/checkpoints" {
+				rewindCmd(a, ed, f[0] == "/undo")
+				continue
+			}
 			if slash(a, bg, line, run) {
 				if confirmQuit(bg) {
 					ui.Goodbye()
@@ -435,6 +446,7 @@ func repl(a *agent.Agent, bg *bgAgents, in sysinfo.Info, cont bool) {
 			}
 			continue
 		}
+		typedNext = line
 		run(attachFiles(a, line))
 	}
 }
@@ -535,6 +547,8 @@ func help() {
 		ui.Accent("/clear") + ui.Sub("     new conversation"),
 		ui.Accent("/resume") + ui.Sub("    reload this folder's last conversation"),
 		ui.Accent("/compact") + ui.Sub("   summarise the chat to free up context"),
+		ui.Accent("/rewind") + ui.Sub("    go back to before a message: restore code, chat or both (esc esc)"),
+		ui.Accent("/undo") + ui.Sub("      rewind the last message's code and chat"),
 		ui.Accent("/init") + ui.Sub("      write BLAZE.md: how this project builds, tests, runs"),
 		ui.Accent("/plan") + ui.Sub("      Plan mode (look, then propose; nothing changes)   ") + ui.Accent("/build"),
 		ui.Accent("/auto") + ui.Sub("      risky actions ask   ") + ui.Accent("/autopilot") + ui.Sub(" nothing asks (catastrophic stays blocked)"),
@@ -555,6 +569,7 @@ func help() {
 		ui.Ink("↑ ↓") + ui.Sub("           history   ") + ui.Ink("→ / tab") + ui.Sub(" accept suggestion"),
 		ui.Ink("ctrl+← →") + ui.Sub("      jump words   ") + ui.Ink("ctrl+w/u/k") + ui.Sub(" cut   ") + ui.Ink("ctrl+l") + ui.Sub(" clear"),
 		ui.Ink("ctrl+c") + ui.Sub("        stop a task · twice on an empty line quits"),
+		ui.Ink("esc esc") + ui.Sub("       on an empty line: /rewind (pick a message to go back to)"),
 		ui.Ink("ctrl+o") + ui.Sub("        show / hide the last answer's steps (commands, output, diffs)"),
 		ui.Ink("typing") + ui.Sub("        works while Blaze is busy: enter queues the message for its next turn"),
 	})
@@ -582,6 +597,7 @@ func slash(a *agent.Agent, bg *bgAgents, line string, run func(string)) bool {
 		return true
 	case "/clear", "/new":
 		a.Reset()
+		openCheckpoints(a, false)
 		// Start over on a clean terminal: screen and scrollback wiped, the start
 		// screen drawn again, so nothing of the old chat (or menus) is left behind.
 		if ui.IsTTY() && welcomeWhere != "" {
@@ -591,6 +607,7 @@ func slash(a *agent.Agent, bg *bgAgents, line string, run func(string)) bool {
 		}
 	case "/resume", "/continue":
 		resume(a)
+		openCheckpoints(a, true)
 	case "/compact":
 		var sp ui.Spinner
 		sp.Start("compacting the conversation")
@@ -599,6 +616,7 @@ func slash(a *agent.Agent, bg *bgAgents, line string, run func(string)) bool {
 		if err != nil {
 			ui.Step(err.Error())
 		} else {
+			a.Checkpoints.ChatGone() // checkpoints can still put code back, not the chat
 			ui.StepDone(true, fmt.Sprintf("Compacted %d messages into a summary", n), "", 0)
 		}
 	case "/init":

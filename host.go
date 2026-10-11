@@ -135,6 +135,7 @@ func wire(a *agent.Agent, interactive bool) *bgAgents {
 	}
 	if bg != nil {
 		a.Handoff = bg.handoff
+		a.ChangePaths = specialistPaths(bg) // applied specialist changes count in the turn (checkpoints)
 	}
 	return bg
 }
