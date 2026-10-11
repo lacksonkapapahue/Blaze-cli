@@ -170,8 +170,6 @@ func Step(s string) { Println("  " + Weak("·") + " " + Sub(s)) }
 
 // ---------- input ----------
 
-var In = bufio.NewReader(os.Stdin)
-
 func ReadLine(prompt string) (string, error) {
 	Printf("%s", prompt)
 	s, err := In.ReadString('\n')
