@@ -166,16 +166,20 @@ func (m *Manager) connect(c *conn, gen int) {
 	} else {
 		c.status, c.client, c.tools, c.err = Connected, cl, tools, ""
 	}
+	c.mu.Unlock()
+	if err != nil {
+		m.log(fmt.Sprintf("MCP server %s didn't start: %v", c.srv.Name, err))
+	}
+	// Routes first, then ready: whoever waits on ready (Wait, the first Tools call)
+	// must find this server's tools already routed.
+	m.rebuildRoutes()
+	c.mu.Lock()
 	select {
 	case <-c.ready:
 	default:
 		close(c.ready)
 	}
 	c.mu.Unlock()
-	if err != nil {
-		m.log(fmt.Sprintf("MCP server %s didn't start: %v", c.srv.Name, err))
-	}
-	m.rebuildRoutes()
 }
 
 func (m *Manager) rebuildRoutes() {

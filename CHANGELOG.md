@@ -14,6 +14,9 @@
   `/connect` (the apps, then `--manual`), `/disconnect`, `/login`, `/keys`, `/learn`, `/update`, `/mcp` (the actions,
   then your servers' names), `/agents` (the actions, then this chat's agents or specialists, 1-6 for `cap`). Commands
   that take options are marked `›` in the menu. The README's new "Commands and their options" table lists them all.
+- Fixed: removing a key right after a key sync (same millisecond) could be undone by the next sync.
+- Fixed: an MCP server's tools could be missing for a moment right after it connected (ready was signalled before its
+  tools were routed), which also made a CI test flaky.
 - In the composer box during a turn, "/" and "@" menus work like at the prompt: ↑ ↓ move, Tab or Enter fills in, Esc closes.
 
 ## v0.8.1 — Verified downloads and tidier releases
