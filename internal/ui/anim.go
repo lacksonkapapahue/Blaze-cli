@@ -161,6 +161,7 @@ func (s *Spinner) Start(text string) {
 		return
 	}
 	s.on = true
+	spinners.Add(1)
 	s.since = time.Now()
 	s.stop = make(chan struct{})
 	s.done = make(chan struct{})
@@ -192,6 +193,11 @@ func spinLine(i int, txt string, el time.Duration) string {
 		tail = "  " + Weak(el.Round(time.Second).String())
 		if el >= 4*time.Second {
 			tail += Weak(" · ctrl-c to stop")
+		}
+	}
+	if StatusLine != nil {
+		if st := StatusLine(); st != "" {
+			tail += Weak("  ·  ") + st
 		}
 	}
 	room := W - 6 - width(tail)
@@ -227,6 +233,7 @@ func (s *Spinner) Stop() {
 		return
 	}
 	s.on = false
+	spinners.Add(-1)
 	close(s.stop)
 	done := s.done
 	s.mu.Unlock()

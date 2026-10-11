@@ -28,16 +28,55 @@ blaze doctor                   check models, shell, tools, scheduler
 blaze pc                       what Blaze detected about this PC
 blaze schedule list | remove NAME
 blaze update                   download the newest release and replace this binary
+blaze login [email|google|github|--signup]   sign in to your Blaze account
+blaze whoami · blaze logout    who's signed in · sign out (here and in Blaze Desktop)
+blaze connect [app] [--manual] list connectors, or connect google / github / notion / slack / spotify
+blaze disconnect APP
 ```
 `blaze update` (or `/update` in chat) uses `GITHUB_TOKEN`, or your `gh` login, while the repo is private.
 Blaze checks for a new version at most once a day and mentions it under the banner (`BLAZE_NO_UPDATE_CHECK=1` turns that off).
-Flags: `--yolo` (skip approvals; deletes still ask), `--model provider/model`.
-In chat: `/clear /model /yolo /jobs /schedule /pc /doctor /setup /exit`. Ctrl-C stops the running task.
+Flags: `--autopilot` (or `--yolo`), `--plan`, `--model provider/model`.
+In chat: `/clear /model /plan /build /auto /autopilot /agents /login /whoami /logout /connect /notify /jobs /schedule /pc /doctor /setup /update /exit`. Ctrl-C stops the running task.
+
+### Modes (same as Blaze Desktop)
+| Mode | What it does |
+|---|---|
+| **Build** · work mode | every tool (default) |
+| **Plan** · work mode | read and scout only: the tool list is filtered and anything that changes the PC is refused; ends with a plan you approve (into Auto or Autopilot) |
+| **Auto** · approval | risky actions (outside-project writes, deletes, risky commands, installs, connector sends) ask first (default) |
+| **Autopilot** · approval | nothing asks; a hard blocklist (wiping disks, the system or your home folder) stays blocked; questions get "decide yourself" automatically; bounded to 150 steps / 45 minutes per turn |
+
+**Shift+Tab** cycles Build·Auto → Build·Autopilot → Plan (terminals can't tell Ctrl+Tab from Tab, so one key walks all three).
+The choice is kept in `~/.blaze/cli.json`.
+
+### Background agents
+Ask for long work and Blaze hands it to a background agent (`dispatch_agent`) so you keep chatting. Up to 3 run at once
+(1 on a 2-core PC); the rest queue. When one finishes, the main agent wakes up and tells you what it found; if the terminal
+isn't focused you get a desktop notification. An agent's approvals and questions wait for you at the prompt (it never draws
+over your typing). Agents are saved in `~/.blaze/cli/agents/`; if Blaze closes mid-run they come back as *interrupted*
+(`/agents resume NAME`), and after an in-chat update they resume by themselves.
+`/agents` lists them · `/agents NAME` shows its steps and report · `/agents msg NAME text` steers it ·
+`/agents cancel|resume|discard NAME` · `/agents new NAME task` starts one yourself.
+
+### Account and connectors
+`blaze login` signs in through Blaze's sign-in service (`https://blaze-auth.blaze-app.workers.dev`): email + password, or
+Google / GitHub in the browser (PKCE S256, state, a one-time 127.0.0.1 loopback redirect). The session lives in the OS keychain
+under the same entry as Blaze Desktop, so signing in on one signs in both. `blaze connect google` (GitHub, Notion, Spotify)
+is one click through the same service: the Worker holds the client secrets, tokens come back to the loopback and go into the
+keychain. Connected apps become tools (Gmail, Calendar, Drive, GitHub issues, Notion pages…); sending or creating things
+asks first unless you choose "Always allow". `--manual` uses your own developer app instead. `BLAZE_CLOUD_URL` points at another Worker.
+
+### Notifications and updates
+Blaze shows native notifications (notify-send / dunstify on Linux, terminal-notifier or osascript on macOS, a PowerShell toast
+on Windows) for finished background agents and when the agent calls `notify`, at most 6 an hour and never the same one twice in
+10 minutes. `/notify text` sends a test. `/update` (or asking "update yourself", the `update_blaze` tool) downloads the build for
+this PC, checks it starts, swaps the binary atomically (one rename; on Windows the old exe is moved aside and restored if the
+swap fails) and restarts Blaze into the same chat.
 
 ### Harness (borrowed from Claude Code)
 | | |
 |---|---|
-| **Shift+Tab** | cycle modes: ask first → auto-approve → **plan mode** (look and propose, nothing changes; then approve the plan to run it) |
+| **Shift+Tab** | cycle modes: Build·Auto → Build·Autopilot → **Plan** (look and propose, nothing changes; then approve the plan to run it) |
 | **Checklist** | for multi-step work Blaze keeps a live plan card (■ done · ▸ doing · □ to do) |
 | **Diffs** | every file write or edit shows a coloured diff with +/- counts |
 | `@path` | attach a file or folder to your message (Tab completes paths) |

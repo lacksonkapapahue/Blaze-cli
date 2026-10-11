@@ -39,6 +39,7 @@ type Editor struct {
 	curRow  int // row of the cursor relative to the prompt's first row
 	histIdx int
 	draft   []rune
+	keep    []rune // typed text kept across a wake
 }
 
 // StdinTTY is true when we can put the keyboard in raw mode.
@@ -112,75 +113,125 @@ func (e *Editor) Read(prompt string) (string, error) {
 		_ = term.Restore(fd, old)
 	}()
 
+	FlushAbove()
+	edMu.Lock()
+	if wakeWanted {
+		wakeWanted = false
+		edMu.Unlock()
+		return "", ErrWake
+	}
+	select {
+	case <-stdinR.wake: // a stale wake from an earlier prompt
+	default:
+	}
 	e.buf, e.pos, e.prompt, e.curRow = nil, 0, prompt, 0
+	if e.keep != nil {
+		e.buf, e.pos, e.keep = e.keep, len(e.keep), nil
+	}
 	e.histIdx, e.draft = len(e.history), nil
+	activeEd = e
 	e.render(false)
+	edMu.Unlock()
+	defer func() {
+		edMu.Lock()
+		if activeEd == e {
+			activeEd = nil
+		}
+		edMu.Unlock()
+	}()
 
 	for {
 		r, _, err := In.ReadRune()
-		if err != nil {
-			e.render(true)
-			Printf("\r\n")
-			return "", io.EOF
+		edMu.Lock()
+		out, done, rerr := e.key(r, err)
+		edMu.Unlock()
+		if done {
+			return out, rerr
 		}
-		switch r {
-		case '\r', '\n':
-			out := string(e.buf)
-			e.render(true)
-			Printf("\r\n")
-			e.remember(out)
-			return out, nil
-		case 3: // Ctrl-C
-			if len(e.buf) > 0 {
-				e.buf, e.pos = nil, 0
-				break
-			}
-			e.render(true)
-			Printf("\r\n")
-			return "", ErrInterrupt
-		case 4: // Ctrl-D
-			if len(e.buf) == 0 {
-				e.render(true)
-				Printf("\r\n")
-				return "", io.EOF
-			}
-			e.del()
-		case 127, 8:
-			e.backspace()
-		case 1:
-			e.pos = 0
-		case 5:
-			e.end()
-		case 2:
-			e.left()
-		case 6:
-			e.right()
-		case 11:
-			e.kill(e.pos, len(e.buf))
-		case 21:
-			e.kill(0, e.pos)
-		case 23:
-			e.kill(e.wordLeft(), e.pos)
-		case 25:
-			e.insert(e.killed)
-		case 12:
-			Printf("\x1b[H\x1b[2J")
-			e.curRow = 0
-		case 16:
-			e.histPrev()
-		case 14:
-			e.histNext()
-		case 9:
-			e.tab()
-		case 27:
-			e.escape()
-		default:
-			if r >= 32 || r == '\t' {
-				e.insert([]rune{r})
-			}
-		}
-		e.render(false)
 	}
+}
+
+// key handles one key (called with edMu held). done ends the Read.
+func (e *Editor) key(r rune, err error) (string, bool, error) {
+	if errors.Is(err, ErrWake) {
+		e.clear()
+		e.keep = append([]rune(nil), e.buf...)
+		wakeWanted = false
+		activeEd = nil
+		return "", true, ErrWake
+	}
+	if err != nil {
+		e.render(true)
+		Printf("\r\n")
+		return "", true, io.EOF
+	}
+	switch r {
+	case '\r', '\n':
+		out := string(e.buf)
+		e.render(true)
+		Printf("\r\n")
+		e.remember(out)
+		return out, true, nil
+	case 3: // Ctrl-C
+		if len(e.buf) > 0 {
+			e.buf, e.pos = nil, 0
+			break
+		}
+		e.render(true)
+		Printf("\r\n")
+		return "", true, ErrInterrupt
+	case 4: // Ctrl-D
+		if len(e.buf) == 0 {
+			e.render(true)
+			Printf("\r\n")
+			return "", true, io.EOF
+		}
+		e.del()
+	case 127, 8:
+		e.backspace()
+	case 1:
+		e.pos = 0
+	case 5:
+		e.end()
+	case 2:
+		e.left()
+	case 6:
+		e.right()
+	case 11:
+		e.kill(e.pos, len(e.buf))
+	case 21:
+		e.kill(0, e.pos)
+	case 23:
+		e.kill(e.wordLeft(), e.pos)
+	case 25:
+		e.insert(e.killed)
+	case 12:
+		Printf("\x1b[H\x1b[2J")
+		e.curRow = 0
+	case 16:
+		e.histPrev()
+	case 14:
+		e.histNext()
+	case 9:
+		e.tab()
+	case 27:
+		e.escape()
+	default:
+		if r >= 32 || r == '\t' {
+			e.insert([]rune{r})
+		}
+	}
+	e.render(false)
+	return "", false, nil
+}
+
+// clear wipes the drawn prompt so something can print where it was.
+func (e *Editor) clear() {
+	if e.curRow > 0 {
+		Printf("\x1b[%dA", e.curRow)
+	}
+	Printf("\r\x1b[J")
+	e.curRow = 0
 }
 
 func (e *Editor) insert(rs []rune) {
@@ -527,7 +578,7 @@ func (e *Editor) render(final bool) {
 		glyph = "  " + glyph // line up with the box in the scrollback
 	}
 	pw := width(glyph)
-	n := W - 1 - pw // text columns per row
+	n := W - 1 - pw     // text columns per row
 	BW := min(W-3, 110) // box width, same as the welcome card
 	if boxed {
 		n = BW - 4 - pw
