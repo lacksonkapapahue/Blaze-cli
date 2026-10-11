@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Deck title</title>
+<style>
+:root { --paper: #fcfcfc; --ink: #111110; --sub: rgba(17,17,16,.56); --hair: rgba(17,17,16,.12); --accent: #1f4bd8;
+  --sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; --mono: ui-monospace, Menlo, Consolas, monospace; }
+:root.dark { --paper: #26262a; --ink: #f0f0ee; --sub: rgba(240,240,238,.6); --hair: rgba(240,240,238,.15); --accent: #6b8cff; }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: #000; }
+.deck { position: fixed; inset: 0; display: grid; place-items: center; }
+.slide { position: absolute; width: 1920px; height: 1080px; padding: 115px; background: var(--paper); color: var(--ink); font: 400 32px/1.4 var(--sans);
+  display: none; flex-direction: column; justify-content: center; transform-origin: center; }
+.slide.on { display: flex; }
+.slide h1 { font-size: 104px; line-height: 1; letter-spacing: -.035em; margin: 0 0 32px; font-weight: 600; max-width: 16ch; }
+.slide h2 { font-size: 56px; line-height: 1.08; letter-spacing: -.025em; margin: 0 0 48px; font-weight: 600; max-width: 28ch; }
+.slide p, .slide li { max-width: 40ch; }
+.slide ul { margin: 0; padding-left: 1.1em; display: grid; gap: 18px; }
+.label { font: 500 22px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--sub); margin-bottom: 28px; }
+.big .n { font-size: 260px; line-height: .9; letter-spacing: -.05em; font-weight: 600; color: var(--accent); }
+.split { display: none; }
+.split.on { display: grid; grid-template-columns: 1fr 1fr; gap: 80px; align-items: center; }
+.quote blockquote { margin: 0; font-size: 64px; line-height: 1.15; letter-spacing: -.02em; max-width: 24ch; }
+.quote cite { display: block; margin-top: 32px; font: 400 26px var(--mono); color: var(--sub); font-style: normal; }
+.slide .foot { position: absolute; left: 115px; right: 115px; bottom: 56px; display: flex; justify-content: space-between; font: 20px var(--mono); color: var(--sub); border-top: 1px solid var(--hair); padding-top: 18px; }
+.notes { display: none; }
+body.shownotes .notes { display: block; position: fixed; left: 0; right: 0; bottom: 0; z-index: 9; max-height: 30vh; overflow: auto; background: #111; color: #eee; font: 16px/1.5 var(--sans); padding: 12px 18px; }
+@media print {
+  @page { size: 1920px 1080px; margin: 0; }
+  html, body { background: none; }
+  .deck { position: static; display: block; }
+  .slide, .split { display: flex !important; position: relative; transform: none !important; page-break-after: always; break-after: page; }
+  .split { display: grid !important; }
+  .notes { display: none !important; }
+}
+</style>
+</head>
+<body>
+<main class="deck" aria-live="polite">
+  <section class="slide title"><div class="label">Project · Oct 2026</div><h1>The takeaway in one line.</h1><p style="color:var(--sub)">Presenter name · role</p>
+    <aside class="notes">Open with why this matters to this audience.</aside></section>
+  <section class="slide"><div class="label">The problem</div><h2>Action title: say what the audience should conclude.</h2>
+    <ul><li>Evidence one, short</li><li>Evidence two, short</li><li>Evidence three, short</li></ul></section>
+  <section class="slide big"><div class="label">Result</div><div class="n">[3×]</div><h2>faster than the old way, measured over [period].</h2></section>
+  <section class="slide split"><div><div class="label">How it works</div><h2>One idea, explained beside one visual.</h2></div>
+    <svg viewBox="0 0 600 400" role="img" aria-label="Bar chart: before 40, after 13">
+      <rect x="80" y="40" width="160" height="320" fill="var(--hair)"/><rect x="340" y="256" width="160" height="104" fill="var(--accent)"/>
+      <text x="160" y="390" text-anchor="middle" font-size="26" fill="currentColor">Before</text><text x="420" y="390" text-anchor="middle" font-size="26" fill="currentColor">After</text>
+      <text x="160" y="28" text-anchor="middle" font-size="30" fill="currentColor">40</text><text x="420" y="244" text-anchor="middle" font-size="30" fill="var(--accent)">13</text></svg></section>
+  <section class="slide quote"><blockquote>“[A real quote that proves the point.]”</blockquote><cite>[Name, role]</cite></section>
+  <section class="slide"><div class="label">Next</div><h2>The decision or action you want, by when.</h2><ul><li>Owner · date</li><li>Owner · date</li></ul></section>
+</main>
+<script>
+(() => {
+  const slides = [...document.querySelectorAll('.slide')];
+  let i = Math.max(0, Math.min(slides.length - 1, (parseInt(location.hash.slice(1)) || 1) - 1));
+  slides.forEach((s, n) => { const f = document.createElement('div'); f.className = 'foot'; f.innerHTML = `<span>${document.title}</span><span>${String(n + 1).padStart(2, '0')} / ${String(slides.length).padStart(2, '0')}</span>`; s.append(f); });
+  const fit = () => { const k = Math.min(innerWidth / 1920, innerHeight / 1080); slides.forEach(s => s.style.transform = `scale(${k})`); };
+  const show = n => { i = Math.max(0, Math.min(slides.length - 1, n)); slides.forEach((s, k) => s.classList.toggle('on', k === i)); history.replaceState(null, '', '#' + (i + 1)); };
+  addEventListener('resize', fit);
+  addEventListener('keydown', e => {
+    if (['ArrowRight', 'PageDown', ' '].includes(e.key)) show(i + 1);
+    else if (['ArrowLeft', 'PageUp'].includes(e.key)) show(i - 1);
+    else if (e.key === 'Home') show(0); else if (e.key === 'End') show(slides.length - 1);
+    else if (e.key === 'f') document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+    else if (e.key === 'd') document.documentElement.classList.toggle('dark');
+    else if (e.key === 'n') document.body.classList.toggle('shownotes');
+    else if (e.key === 'p') print();
+  });
+  addEventListener('click', e => show(i + (e.clientX > innerWidth / 3 ? 1 : -1)));
+  fit(); show(i);
+})();
+</script>
+</body>
+</html>

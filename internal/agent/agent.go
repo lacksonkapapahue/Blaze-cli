@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/lacksonkapapahue/blaze-cli/internal/config"
+	"github.com/lacksonkapapahue/blaze-cli/internal/learn"
 	"github.com/lacksonkapapahue/blaze-cli/internal/llm"
 	"github.com/lacksonkapapahue/blaze-cli/internal/sysinfo"
 	"github.com/lacksonkapapahue/blaze-cli/internal/tools"
@@ -126,14 +127,10 @@ RULES
 		b.WriteString("This folder is a git repository.\n")
 	}
 	if m := tools.Memory(); m != "" {
-		b.WriteString("\nWHAT YOU KNOW ABOUT THE USER\n" + m + "\n")
+		b.WriteString("\nWHAT YOU KNOW ABOUT THE USER (ids let remember replace and forget remove a memory)\n" + m + "\n")
 	}
-	if sk := tools.Skills(); len(sk) > 0 {
-		b.WriteString("\nSKILLS (load with use_skill before that kind of task)\n")
-		for _, s := range sk {
-			b.WriteString("- " + s.Name + ": " + s.Desc + "\n")
-		}
-	}
+	b.WriteString(tools.SkillsFor(recentQuery(a.History)))
+	b.WriteString(learn.Rules(LearnOn()))
 	b.WriteString("\nNow: " + time.Now().Format("Mon 2 Jan 2006 15:04 MST") + "\n")
 	return b.String()
 }
@@ -204,6 +201,7 @@ func (a *Agent) Ask(ctx context.Context, prompt string) (string, error) {
 			if !a.Quiet {
 				ui.Footer(r.Route, time.Since(started))
 			}
+			a.Reflect(ctx) // end-of-turn learning check (learn.go)
 			return final, nil
 		}
 		for _, tc := range r.ToolCalls {
@@ -221,6 +219,7 @@ func (a *Agent) Ask(ctx context.Context, prompt string) (string, error) {
 			if !a.Quiet && !quietStep {
 				ui.StepDone(succeeded(res), describe(tc), summarize(res), time.Since(t0))
 			}
+			a.printLearned()
 			a.History = append(a.History, llm.Message{Role: "tool", ToolCallID: tc.ID, Name: tc.Function.Name, Content: res})
 		}
 	}
