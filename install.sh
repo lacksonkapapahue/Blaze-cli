@@ -1,7 +1,7 @@
 #!/bin/sh
 # Blaze CLI installer for macOS and Linux.
 #   curl -fsSL https://github.com/lacksonkapapahue/Blaze-cli/releases/latest/download/install.sh | sh
-# Private repo? export GITHUB_TOKEN=<token with repo read> first.
+# If the repo is ever private: export GITHUB_TOKEN=<token with repo read> first.
 set -e
 REPO="lacksonkapapahue/Blaze-cli"
 os=$(uname -s | tr '[:upper:]' '[:lower:]')

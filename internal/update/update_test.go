@@ -3,6 +3,7 @@ package update
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -58,5 +59,18 @@ func TestSwapFailureKeepsCurrent(t *testing.T) {
 	b, _ := os.ReadFile(self)
 	if string(b) != "old" {
 		t.Fatalf("self = %q, want old kept", b)
+	}
+}
+
+func TestSumFor(t *testing.T) {
+	h := strings.Repeat("ab", 32)
+	sums := "1111111111111111111111111111111111111111111111111111111111111111  blaze-linux-arm64\n" +
+		strings.ToUpper(h) + " *blaze-linux-amd64\n"
+	got, err := sumFor(strings.NewReader(sums), "blaze-linux-amd64")
+	if err != nil || got != h {
+		t.Fatalf("sumFor = %q, %v; want %q", got, err, h)
+	}
+	if _, err := sumFor(strings.NewReader(sums), "blaze-darwin-arm64"); err == nil {
+		t.Fatal("want an error for a missing entry")
 	}
 }
