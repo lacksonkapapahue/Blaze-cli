@@ -20,6 +20,11 @@ if [ -n "$GITHUB_TOKEN" ]; then
 else
   curl -fsSL "https://github.com/$REPO/releases/latest/download/$asset" -o "$dir/blaze"
 fi
+if [ -z "$GITHUB_TOKEN" ] && sums=$(curl -fsSL "https://github.com/$REPO/releases/latest/download/SHA256SUMS" 2>/dev/null); then
+  want=$(printf '%s\n' "$sums" | awk -v a="$asset" '$2==a {print $1}')
+  if command -v sha256sum >/dev/null 2>&1; then got=$(sha256sum "$dir/blaze" | cut -d' ' -f1); else got=$(shasum -a 256 "$dir/blaze" | cut -d' ' -f1); fi
+  if [ -n "$want" ] && [ "$want" != "$got" ]; then rm -f "$dir/blaze"; echo "  Checksum mismatch for $asset; not installing."; exit 1; fi
+fi
 chmod +x "$dir/blaze"
 case ":$PATH:" in *":$dir:"*) ;; *)
   for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do [ -f "$rc" ] && { echo "export PATH=\"$dir:\$PATH\"" >> "$rc" || true; }; done

@@ -421,14 +421,6 @@ func succeeded(res string) bool {
 	return true
 }
 
-func summarize(res string) string {
-	l := strings.SplitN(strings.TrimSpace(res), "\n", 2)[0]
-	if len(l) > 60 {
-		l = l[:60] + "…"
-	}
-	return l
-}
-
 // trim keeps the conversation inside a sane window without splitting tool pairs.
 func (a *Agent) trim() {
 	const max = 60
