@@ -118,14 +118,20 @@ func (e *Editor) menuLines(bw int) []string {
 	if m == nil {
 		return nil
 	}
+	return drawMenu(m, e.menuIdx, bw)
+}
+
+// drawMenu draws m with row idx highlighted as a hairline box bw wide. The prompt
+// and the composer under the working line share it.
+func drawMenu(m *MenuSet, idx, bw int) []string {
 	if bw < 30 {
 		bw = 30
 	}
 	inner := bw - 4 // "│ " + text + " │"
 	height := min(max(m.Full, len(m.Items)), menuRows)
 	start := 0
-	if e.menuIdx >= height {
-		start = e.menuIdx - height + 1
+	if idx >= height {
+		start = idx - height + 1
 	}
 	nameW := 0
 	for _, it := range m.Items {
@@ -147,7 +153,7 @@ func (e *Editor) menuLines(bw int) []string {
 			name := clip(it.Name, nameW-3)
 			pad := strings.Repeat(" ", max(1, nameW-1-width(name)))
 			desc := clip(it.Desc, max(0, inner-nameW-1))
-			if i == e.menuIdx {
+			if i == idx {
 				row = Accent("▸ "+name) + pad + Ink(desc)
 			} else {
 				row = "  " + Body(name) + pad + Sub(desc)
@@ -157,7 +163,7 @@ func (e *Editor) menuLines(bw int) []string {
 	}
 	hint := "↑↓ move · enter pick · tab fill in · esc close"
 	if len(m.Items) > height {
-		hint = fmt.Sprintf("%d/%d · ", e.menuIdx+1, len(m.Items)) + hint
+		hint = fmt.Sprintf("%d/%d · ", idx+1, len(m.Items)) + hint
 	}
 	out = append(out, "  "+hair("└─ ")+Weak(hint)+" "+hair(strings.Repeat("─", max(0, bw-width(hint)-5))+"┘"))
 	return out

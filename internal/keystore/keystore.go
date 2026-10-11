@@ -280,6 +280,17 @@ func (s *Store) Where(account string) string {
 
 func providerOf(account string) string { return strings.TrimSuffix(account, ExtraSuffix) }
 
+// now is the time to stamp a change made here: the clock, but always after the
+// provider's last stamp, so an edit made in the same millisecond as a sync still
+// counts as newer and wins the merge.
+func (s *Store) now(account string) int64 {
+	t := time.Now().UnixMilli()
+	if last := s.readMeta().Changed[providerOf(account)]; t <= last {
+		t = last + 1
+	}
+	return t
+}
+
 func (s *Store) stamp(account string, at int64) {
 	m := s.readMeta()
 	m.Changed[providerOf(account)] = at
@@ -288,7 +299,7 @@ func (s *Store) stamp(account string, at int64) {
 
 // Set stores an account's value (an empty value deletes it) and returns where it went.
 func (s *Store) Set(account, value string) (string, error) {
-	return s.set(account, value, time.Now().UnixMilli())
+	return s.set(account, value, s.now(account))
 }
 
 func (s *Store) set(account, value string, at int64) (string, error) {
@@ -324,7 +335,7 @@ func (s *Store) set(account, value string, at int64) (string, error) {
 }
 
 // Delete removes an account everywhere (keychain, keys.json, legacy config.json).
-func (s *Store) Delete(account string) error { return s.del(account, time.Now().UnixMilli()) }
+func (s *Store) Delete(account string) error { return s.del(account, s.now(account)) }
 
 func (s *Store) del(account string, at int64) error {
 	s.mu.Lock()
@@ -360,7 +371,7 @@ func (s *Store) Extras(provider string) []string {
 
 // SetExtras replaces a provider's extra keys.
 func (s *Store) SetExtras(provider string, l []string) (string, error) {
-	return s.setExtras(provider, l, time.Now().UnixMilli())
+	return s.setExtras(provider, l, s.now(provider))
 }
 
 func (s *Store) setExtras(provider string, l []string, at int64) (string, error) {
@@ -379,7 +390,7 @@ func (s *Store) All(provider string) []string {
 
 // SetAll replaces a provider's whole ring (first = main). An empty list deletes it.
 func (s *Store) SetAll(provider string, keys []string) error {
-	return s.setAll(provider, keys, time.Now().UnixMilli())
+	return s.setAll(provider, keys, s.now(provider))
 }
 
 func (s *Store) setAll(provider string, keys []string, at int64) error {

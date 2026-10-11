@@ -674,9 +674,6 @@ func (e *Editor) render(final bool) {
 	}
 	rows, cr, cc := layout(cells, n, pos)
 	_ = nText
-	if final {
-		pos = len(cells)
-	}
 
 	var sb strings.Builder
 	if e.curRow > 0 {

@@ -275,6 +275,10 @@ func repl(a *agent.Agent, bg *bgAgents, in sysinfo.Info, cont bool) {
 		}
 		return ui.Accent("› ")
 	}
+	// the composer box under the working line looks and pops up menus like the prompt
+	ui.DockGlyph = func() string { return ed.Glyph("") }
+	ui.DockMenu = slashMenu
+	menuAgents = func() []agents.View { return bg.m.List(bg.conv) }
 	ed.Footer = func(line string) string {
 		switch {
 		case strings.HasPrefix(line, "!"):
@@ -523,7 +527,7 @@ func shellMode(a *agent.Agent, cmd string) {
 	if len(rec) > 8000 {
 		rec = rec[:4000] + "\n…\n" + rec[len(rec)-4000:]
 	}
-	a.History = append(a.History, llm.Message{Role: "user", Content: "<shell>\n$ " + cmd + "\n" + rec + "\n</shell>\n(I ran this myself; no reply needed unless I ask.)"},
+	a.Push(llm.Message{Role: "user", Content: "<shell>\n$ " + cmd + "\n" + rec + "\n</shell>\n(I ran this myself; no reply needed unless I ask.)"},
 		llm.Message{Role: "assistant", Content: "Noted."})
 	a.Save()
 }

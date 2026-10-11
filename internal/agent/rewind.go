@@ -70,7 +70,7 @@ func (a *Agent) RewindChat(t *checkpoint.Turn) bool {
 	if i < 0 {
 		return false
 	}
-	a.History = a.History[:i]
+	a.SetHistory(a.History[:i])
 	tools.ResetTodos()
 	return true
 }

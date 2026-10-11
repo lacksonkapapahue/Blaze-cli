@@ -23,6 +23,40 @@
 - New `internal/checkpoint` package with tests: edit, create and delete restored; several messages; conflict detection (with
   and without git); a git snapshot leaves the index, branch, status and stash alone; shell changes rewound; big files; a
   deleted folder; pruning; chat cut back to the right message, even after old messages were trimmed.
+- Built on v0.8.2: the composer box and the option menus include `/rewind` and `/undo`.
+
+## v0.8.2 — The real chat bar stays while Blaze works, and menus for @ and every command's options
+
+- **The composer box stays on screen during a turn.** Instead of the short "› type to queue a message" beside the working
+  line, the same boxed chat bar as the prompt sits under it, with the mode glyph, a caret and a footer. Type there, and
+  Enter queues the message for Blaze's next turn ("1 queued · Blaze reads it next"). Long lines scroll so the end stays in
+  view. It gives way while the reply streams and comes back with the next step. Terminals without colour or narrower
+  than 30 columns keep the one-line composer.
+- **"@" opens a files menu**, the same pop-up as "/": the folder's folders (first) and files with their sizes, filtered as
+  you type. Picking a folder lists what's inside it, and picking a file fills in `@path ` so you keep typing. Dotfiles
+  show once you type a dot, and `.git` never does. It works at the prompt and in the composer box during a turn.
+- **Every command with options shows them.** After a command and a space, its choices pop up the way "/" does:
+  `/connect` (the apps, then `--manual`), `/disconnect`, `/login`, `/keys`, `/learn`, `/update`, `/mcp` (the actions,
+  then your servers' names), `/agents` (the actions, then this chat's agents or specialists, 1-6 for `cap`). Commands
+  that take options are marked `›` in the menu. The README's new "Commands and their options" table lists them all.
+- Fixed: removing a key right after a key sync (same millisecond) could be undone by the next sync.
+- Fixed: an MCP server's tools could be missing for a moment right after it connected (ready was signalled before its
+  tools were routed), which also made a CI test flaky.
+- In the composer box during a turn, "/" and "@" menus work like at the prompt: ↑ ↓ move, Tab or Enter fills in, Esc closes.
+
+## v0.8.1 — Verified downloads and tidier releases
+
+- **Downloads are checked.** Every release now ships `SHA256SUMS`. `install.sh`, `install.ps1` and `blaze update` refuse a
+  binary whose hash doesn't match (older releases without the file still get the start-up smoke test).
+- **Gemini models are picked again.** The "small model" filter matched the `mini` inside `gemini`, so Gemini models (also
+  OpenRouter's free ones) were never chosen by the model picker.
+- **Releases are never overwritten.** CI used to delete and re-create the release for the current VERSION on every push to
+  main; now it publishes only when VERSION names a new release.
+- **Two data races fixed** (found by the new race-detector run): background agents read the main chat's history to build
+  their prompt while the main chat was writing it, and a local MCP server's process was waited on twice when it was
+  stopped. History writes now go through a lock, and the server is waited on once.
+- CI runs the tests with `-race` and runs staticcheck. First tests for `internal/llm` (streaming, tool-call assembly, error
+  cleanup, model picking) and for checksum parsing. Dead code removed; README and installers no longer say the repo is private.
 
 ## v0.8.0 — MCP servers
 

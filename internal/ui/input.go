@@ -229,9 +229,7 @@ func Above(lines ...string) {
 		}
 		activeEd.render(false)
 	case spinners.Load() > 0:
-		for _, l := range lines {
-			Printf("\r\x1b[2K%s\n", l)
-		}
+		printOverLive(lines) // over the working line and the composer (dock.go)
 	default:
 		aboveQ = append(aboveQ, lines...)
 	}

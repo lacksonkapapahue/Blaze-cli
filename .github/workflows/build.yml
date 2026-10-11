@@ -20,7 +20,9 @@ jobs:
         run: |
           for t in linux/amd64 windows/amd64 darwin/arm64; do GOOS=${t%/*} GOARCH=${t#*/} go vet ./...; done
       - name: Test
-        run: go test ./...
+        run: go test -race ./...
+      - name: Staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@latest -checks inherit,-ST1005 ./...
       - name: Build all platforms
         run: |
           V=$(cat VERSION)
@@ -30,6 +32,7 @@ jobs:
             CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=v$V" -o dist/blaze-$os-$arch$ext .
           done
           cp install.sh install.ps1 dist/
+          (cd dist && sha256sum blaze-* > SHA256SUMS)
           ls -l dist
       - name: Smoke test
         run: ./dist/blaze-linux-amd64 version && ./dist/blaze-linux-amd64 pc
@@ -44,5 +47,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           V=v$(cat VERSION)
-          gh release delete "$V" -y --cleanup-tag 2>/dev/null || true
+          if gh release view "$V" >/dev/null 2>&1; then
+            echo "::notice::$V is already released; bump VERSION to publish a new one."
+            exit 0
+          fi
           gh release create "$V" dist/* --title "Blaze CLI $V" --notes "Blaze CLI $V. What's new: see CHANGELOG.md. Install: see README." --latest

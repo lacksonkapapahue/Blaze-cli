@@ -1,7 +1,7 @@
 #!/bin/sh
 # Blaze CLI installer for macOS and Linux.
 #   curl -fsSL https://github.com/lacksonkapapahue/Blaze-cli/releases/latest/download/install.sh | sh
-# Private repo? export GITHUB_TOKEN=<token with repo read> first.
+# If the repo is ever private: export GITHUB_TOKEN=<token with repo read> first.
 set -e
 REPO="lacksonkapapahue/Blaze-cli"
 os=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -19,6 +19,11 @@ if [ -n "$GITHUB_TOKEN" ]; then
     "https://api.github.com/repos/$REPO/releases/assets/$id" -o "$dir/blaze"
 else
   curl -fsSL "https://github.com/$REPO/releases/latest/download/$asset" -o "$dir/blaze"
+fi
+if [ -z "$GITHUB_TOKEN" ] && sums=$(curl -fsSL "https://github.com/$REPO/releases/latest/download/SHA256SUMS" 2>/dev/null); then
+  want=$(printf '%s\n' "$sums" | awk -v a="$asset" '$2==a {print $1}')
+  if command -v sha256sum >/dev/null 2>&1; then got=$(sha256sum "$dir/blaze" | cut -d' ' -f1); else got=$(shasum -a 256 "$dir/blaze" | cut -d' ' -f1); fi
+  if [ -n "$want" ] && [ "$want" != "$got" ]; then rm -f "$dir/blaze"; echo "  Checksum mismatch for $asset; not installing."; exit 1; fi
 fi
 chmod +x "$dir/blaze"
 case ":$PATH:" in *":$dir:"*) ;; *)
