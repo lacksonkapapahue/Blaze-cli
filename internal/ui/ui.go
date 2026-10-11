@@ -172,6 +172,9 @@ func Step(s string) { Println("  " + Weak("·") + " " + Sub(s)) }
 
 func ReadLine(prompt string) (string, error) {
 	Printf("%s", prompt)
+	if quietSession() {
+		return readEchoed()
+	}
 	s, err := In.ReadString('\n')
 	return strings.TrimRight(s, "\r\n"), err
 }

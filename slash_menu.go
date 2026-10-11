@@ -23,7 +23,7 @@ var slashMenuCmds = []slashCmd{
 	{"/resume", "Reload this folder's last conversation", false},
 	{"/compact", "Summarise the chat to free up context", false},
 	{"/init", "Write BLAZE.md: how this project builds, tests, runs", false},
-	{"/model", "Show models, or /model provider/model to try one first", false},
+	{"/model", "Pick the model Blaze uses (saved for next time)", true},
 	{"/skills", "Use one of your skills", true},
 	{"/plan", "Plan mode: read and scout only, then a plan (Shift+Tab)", false},
 	{"/build", "Build mode: every tool (Shift+Tab)", false},
@@ -75,6 +75,9 @@ func slashMenu(line string) *ui.MenuSet {
 		q := strings.TrimPrefix(cmd, "/")
 		items := ui.Rank(all, q, func(it ui.MenuItem) string { return strings.TrimSpace(strings.TrimPrefix(it.Insert, "/")) })
 		return &ui.MenuSet{Title: "commands", Items: items, Full: len(all)}
+	}
+	if cmd == "/model" && menuCfg != nil {
+		return modelMenu(rest, menuCfg)
 	}
 	if cmd == "/skills" {
 		return skillsMenu(rest, tools.SkillStatus())

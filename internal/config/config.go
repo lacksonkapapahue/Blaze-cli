@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"github.com/zalando/go-keyring"
@@ -57,8 +58,19 @@ type Config struct {
 	MaxSteps    int               `json:"max_steps"`
 	Persona     string            `json:"persona,omitempty"`
 	NoKeyless   bool              `json:"no_keyless,omitempty"` // don't fall back to the keyless model
-	path        string
+
+	// Shared with Blaze Desktop (its Settings › Models): the model you picked, and
+	// the model chosen per provider. Default nil or provider "auto" = Auto.
+	Default  *Entry            `json:"default,omitempty"`
+	ModelFor map[string]string `json:"model_for,omitempty"`
+
+	// Override is a one-off "--model" for this run only; never saved.
+	Override *Entry `json:"-"`
+	path     string
 }
+
+// Auto is the provider id that means "no fixed model, route over the chain".
+const Auto = "auto"
 
 func Dir() string {
 	if d := os.Getenv("BLAZE_HOME"); d != "" {
@@ -79,12 +91,105 @@ func Load() *Config {
 	return c
 }
 
+// Save writes config.json. The file is shared with Blaze Desktop, so keys this
+// version doesn't know (Desktop's routing settings, custom provider, …) are read
+// back from the file and kept rather than dropped.
 func (c *Config) Save() error {
 	if err := os.MkdirAll(Dir(), 0o700); err != nil {
 		return err
 	}
-	b, _ := json.MarshalIndent(c, "", "  ")
+	b, err := mergeJSON(c.path, c)
+	if err != nil {
+		return err
+	}
 	return os.WriteFile(c.path, b, 0o600)
+}
+
+// mergeJSON returns v as indented JSON on top of the object already in path:
+// keys v has replace the file's, keys only the file has are kept, and keys v
+// leaves out because they are empty (omitempty) are removed.
+func mergeJSON(path string, v any) ([]byte, error) {
+	mine, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]json.RawMessage{}
+	if old, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(old, &out)
+	}
+	known := map[string]bool{}
+	t := reflect.TypeOf(v)
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	for i := 0; i < t.NumField(); i++ {
+		if name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ","); name != "" && name != "-" {
+			known[name] = true
+		}
+	}
+	for k := range known {
+		delete(out, k)
+	}
+	var cur map[string]json.RawMessage
+	if err := json.Unmarshal(mine, &cur); err != nil {
+		return nil, err
+	}
+	for k, val := range cur {
+		out[k] = val
+	}
+	return json.MarshalIndent(out, "", "  ")
+}
+
+// IsAuto is true when no fixed model is picked (Desktop's "Auto").
+func (c *Config) IsAuto() bool {
+	return c.Default == nil || c.Default.Provider == "" || c.Default.Provider == Auto
+}
+
+// Model is the model Blaze uses for a provider: the one picked for it, then its
+// chain entry's, then the provider's built-in default (Desktop's rule).
+func (c *Config) Model(provider string) string {
+	if m := c.ModelFor[provider]; m != "" {
+		return m
+	}
+	for _, e := range c.Chain {
+		if e.Provider == provider && e.Model != "" {
+			return e.Model
+		}
+	}
+	if p, ok := ProviderByID(provider); ok {
+		return p.DefaultModel
+	}
+	return ""
+}
+
+// SelectModel makes provider/model the model Blaze uses from now on, in the CLI
+// and in Blaze Desktop: it becomes the default, the provider's chosen model and
+// the first chain entry (the others stay behind it as fallbacks), and is saved.
+// provider "auto" goes back to plain chain order.
+func (c *Config) SelectModel(provider, model string) error {
+	if provider == "" || provider == Auto {
+		c.Default = nil
+		return c.Save()
+	}
+	if model == "" {
+		model = c.Model(provider)
+	}
+	c.Default = &Entry{Provider: provider, Model: model}
+	if model != "" {
+		if c.ModelFor == nil {
+			c.ModelFor = map[string]string{}
+		}
+		c.ModelFor[provider] = model
+	}
+	chain := []Entry{{Provider: provider, Model: model}}
+	for _, e := range c.Chain {
+		if e.Provider == provider && (e.Model == model || e.Model == "" && model == c.Model(provider)) {
+			continue
+		}
+		chain = append(chain, e)
+	}
+	c.Chain = chain
+	return c.Save()
 }
 
 // Key returns the provider's key: env var first, then keychain, then the file.
@@ -136,8 +241,35 @@ func (c *Config) HasAnyModel() bool {
 func Keyless(id string) bool { return id == "ollama" || id == "pollinations" }
 
 // RouteChain is the chain plus the keyless last resort.
+// A --model override goes first, then the picked default model, then the chain.
 func (c *Config) RouteChain() []Entry {
-	ch := append([]Entry(nil), c.Chain...)
+	var ch []Entry
+	seen := map[Entry]bool{}
+	add := func(e Entry) {
+		k := e
+		if p, ok := ProviderByID(k.Provider); ok && k.Model == "" {
+			k.Model = p.DefaultModel
+		}
+		if !seen[k] {
+			seen[k] = true
+			ch = append(ch, e)
+		}
+	}
+	if c.Override != nil {
+		add(*c.Override)
+	}
+	if !c.IsAuto() {
+		if _, ok := ProviderByID(c.Default.Provider); ok {
+			d := *c.Default
+			if d.Model == "" {
+				d.Model = c.Model(d.Provider)
+			}
+			add(d)
+		}
+	}
+	for _, e := range c.Chain {
+		add(e)
+	}
 	if c.NoKeyless {
 		return ch
 	}

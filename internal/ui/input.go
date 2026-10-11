@@ -135,15 +135,53 @@ func FocusKnown() bool { return focusSeen.Load() }
 
 // FocusReporting asks the terminal to report focus changes (xterm's mode 1004;
 // supported by most modern terminals, and by tmux with focus-events on).
+//
+// While it is on, the terminal stays in Quiet mode (no echo, no line buffering;
+// Ctrl-C still works) for the whole session, not only while a task runs. The
+// terminal can send a focus report at any moment (while a session is being
+// resumed, between prompts, during a slash command), and in the normal cooked
+// mode the tty would echo it straight onto the screen as ^[[O before Blaze reads
+// it. ReadLine echoes what you type itself meanwhile (readEchoed). Switching
+// reporting off around a line instead would not work: terminals answer the
+// switch back on with a report, which would land in cooked mode again.
 func FocusReporting(on bool) {
 	if !IsTTY() || !StdinTTY() || !color {
 		return
 	}
+	focusMu.Lock()
+	defer focusMu.Unlock()
 	if on {
+		if focusOn {
+			return
+		}
+		focusRestore, focusQuiet = quiet() // echo off first, so no report is ever echoed
+		focusOn = true
 		Printf("\x1b[?1004h")
-	} else {
-		Printf("\x1b[?1004l")
+		return
 	}
+	if !focusOn {
+		return
+	}
+	Printf("\x1b[?1004l")
+	focusOn, focusQuiet = false, false
+	if focusRestore != nil {
+		focusRestore()
+		focusRestore = nil
+	}
+}
+
+var (
+	focusMu      sync.Mutex
+	focusOn      bool
+	focusQuiet   bool // the session switched the terminal to Quiet mode (Unix)
+	focusRestore func()
+)
+
+// quietSession is true while FocusReporting keeps the terminal in Quiet mode.
+func quietSession() bool {
+	focusMu.Lock()
+	defer focusMu.Unlock()
+	return focusQuiet
 }
 
 // ---------- the open prompt ----------
