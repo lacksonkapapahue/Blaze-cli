@@ -171,7 +171,7 @@ func (f *fakeHTTP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if r.Header.Get("Authorization") != "Bearer secret" {
-		http.Error(w, "no token", 401)
+		http.Error(w, "no token", http.StatusUnauthorized)
 		return
 	}
 	if r.Method == "DELETE" {

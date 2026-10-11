@@ -15,8 +15,8 @@ irm https://github.com/lacksonkapapahue/Blaze-cli/releases/latest/download/insta
 curl -fsSL https://github.com/lacksonkapapahue/Blaze-cli/releases/latest/download/install.sh | sh
 ```
 
-While the repo is private the one-liners need a token: set `GITHUB_TOKEN` (repo read) first, or download
-`blaze-<os>-<arch>` from the latest release and run `blaze setup`.
+Or download `blaze-<os>-<arch>` from the [latest release](https://github.com/lacksonkapapahue/Blaze-cli/releases/latest),
+check it against `SHA256SUMS`, and run `blaze setup`.
 
 ## Use
 
@@ -39,7 +39,6 @@ blaze mcp remove NAME · blaze mcp enable|disable NAME
 blaze skills [NAME]            skill library: list, show one, or on|off|delete|restore NAME
 blaze learn [on|off]           learn memories and skills automatically (shared with Desktop)
 ```
-`blaze update` (or `/update` in chat) uses `GITHUB_TOKEN`, or your `gh` login, while the repo is private.
 Blaze checks for a new version at most once a day and mentions it under the banner (`BLAZE_NO_UPDATE_CHECK=1` turns that off).
 Flags: `--autopilot` (or `--yolo`), `--plan`, `--model provider/model`.
 In chat: `/clear /model /plan /build /auto /autopilot /agents /login /whoami /logout /connect /mcp /notify /skills /learn /jobs /schedule /pc /doctor /setup /update /exit`. Ctrl-C stops the running task; Ctrl+O shows the last steps in full.

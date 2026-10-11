@@ -66,8 +66,6 @@ func RestoreSkill(name string) error {
 	return nil
 }
 
-func disabledSkills() map[string]bool { return skillpack.DisabledSet(skillsDir()) }
-
 // WriteSkill creates or replaces ~/.blaze/skills/<name>/SKILL.md. It keeps the
 // skill's version number moving up so other Blaze apps see a change.
 func WriteSkill(name, desc string, tags []string, body string) (created bool, err error) {

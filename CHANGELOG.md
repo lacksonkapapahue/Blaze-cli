@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.8.1 — Verified downloads and tidier releases
+
+- **Downloads are checked.** Every release now ships `SHA256SUMS`. `install.sh`, `install.ps1` and `blaze update` refuse a
+  binary whose hash doesn't match (older releases without the file still get the start-up smoke test).
+- **Gemini models are picked again.** The "small model" filter matched the `mini` inside `gemini`, so Gemini models (also
+  OpenRouter's free ones) were never chosen by the model picker.
+- **Releases are never overwritten.** CI used to delete and re-create the release for the current VERSION on every push to
+  main; now it publishes only when VERSION names a new release.
+- **Two data races fixed** (found by the new race-detector run): background agents read the main chat's history to build
+  their prompt while the main chat was writing it, and a local MCP server's process was waited on twice when it was
+  stopped. History writes now go through a lock, and the server is waited on once.
+- CI runs the tests with `-race` and runs staticcheck. First tests for `internal/llm` (streaming, tool-call assembly, error
+  cleanup, model picking) and for checksum parsing. Dead code removed; README and installers no longer say the repo is private.
+
 ## v0.8.0 — MCP servers
 
 - **Blaze can use MCP (Model Context Protocol) servers.** Add one with `blaze mcp add github -- npx -y

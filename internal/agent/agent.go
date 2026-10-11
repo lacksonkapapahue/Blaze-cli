@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lacksonkapapahue/blaze-cli/internal/config"
@@ -21,7 +22,8 @@ import (
 type Agent struct {
 	Cfg     *config.Config
 	Env     *tools.Env
-	History []llm.Message
+	History []llm.Message // written only through push/SetHistory (background agents read it via SystemPrompt)
+	hmu     sync.RWMutex
 	Quiet   bool // one-shot / scheduled: no spinner
 	spin    *ui.Spinner
 	diffed  bool // a diff was drawn for the current tool call
@@ -148,10 +150,11 @@ RULES
 	if _, err := os.Stat(a.Env.Root + string(os.PathSeparator) + ".git"); err == nil {
 		b.WriteString("This folder is a git repository.\n")
 	}
-	if m := tools.Memory(recentQuery(a.History)); m != "" {
+	q := recentQuery(a.historyCopy())
+	if m := tools.Memory(q); m != "" {
 		b.WriteString("\nWHAT YOU KNOW ABOUT THE USER (ids let remember replace and forget remove a memory)\n" + m + "\n")
 	}
-	b.WriteString(tools.SkillsFor(recentQuery(a.History)))
+	b.WriteString(tools.SkillsFor(q))
 	b.WriteString(learn.Rules(LearnOn()))
 	b.WriteString("\nNow: " + time.Now().Format("Mon 2 Jan 2006 15:04 MST") + "\n")
 	return b.String()
@@ -159,7 +162,7 @@ RULES
 
 // Ask runs one user turn to completion and returns the final text.
 func (a *Agent) Ask(ctx context.Context, prompt string) (_ string, err error) {
-	a.History = append(a.History, llm.Message{Role: "user", Content: prompt})
+	a.push(llm.Message{Role: "user", Content: prompt})
 	a.trim()
 	started := time.Now()
 	act := &ui.Activity{}
@@ -219,11 +222,11 @@ func (a *Agent) Ask(ctx context.Context, prompt string) (_ string, err error) {
 		if err != nil {
 			// Keep history valid: drop the unanswered user turn on hard failure of the first step.
 			if step == 0 {
-				a.History = a.History[:len(a.History)-1]
+				a.SetHistory(a.History[:len(a.History)-1])
 			}
 			return "", err
 		}
-		a.History = append(a.History, llm.Message{Role: "assistant", Content: r.Text, ToolCalls: r.ToolCalls})
+		a.push(llm.Message{Role: "assistant", Content: r.Text, ToolCalls: r.ToolCalls})
 		if len(r.ToolCalls) == 0 {
 			final = r.Text
 			// Autopilot: the user is away, so a question gets the automatic answer.
@@ -232,7 +235,7 @@ func (a *Agent) Ask(ctx context.Context, prompt string) (_ string, err error) {
 				if !a.Quiet {
 					ui.StepDone(true, "Autopilot answered", "the user is away: decide and continue", 0)
 				}
-				a.History = append(a.History, llm.Message{Role: "user", Content: "[Autopilot] " + tools.AutoReply})
+				a.push(llm.Message{Role: "user", Content: "[Autopilot] " + tools.AutoReply})
 				continue
 			}
 			if !a.Quiet {
@@ -265,7 +268,7 @@ func (a *Agent) Ask(ctx context.Context, prompt string) (_ string, err error) {
 				ui.StepDone(st.OK, plain, "", st.Took)
 			}
 			a.printLearned()
-			a.History = append(a.History, llm.Message{Role: "tool", ToolCallID: tc.ID, Name: tc.Function.Name, Content: res})
+			a.push(llm.Message{Role: "tool", ToolCallID: tc.ID, Name: tc.Function.Name, Content: res})
 		}
 		// Handing work off ends the turn at once: the user gets a short line and the
 		// prompt is theirs again while the agents work (Blaze Desktop's rule).
@@ -273,7 +276,7 @@ func (a *Agent) Ask(ctx context.Context, prompt string) (_ string, err error) {
 			final = r.Text
 			if strings.TrimSpace(final) == "" {
 				final = HandoffLine
-				a.History = append(a.History, llm.Message{Role: "assistant", Content: final})
+				a.push(llm.Message{Role: "assistant", Content: final})
 				if !a.Quiet {
 					ui.Println("\n  " + ui.Body(final))
 				}
@@ -421,14 +424,6 @@ func succeeded(res string) bool {
 	return true
 }
 
-func summarize(res string) string {
-	l := strings.SplitN(strings.TrimSpace(res), "\n", 2)[0]
-	if len(l) > 60 {
-		l = l[:60] + "…"
-	}
-	return l
-}
-
 // trim keeps the conversation inside a sane window without splitting tool pairs.
 func (a *Agent) trim() {
 	const max = 60
@@ -439,9 +434,34 @@ func (a *Agent) trim() {
 	for cut < len(a.History) && a.History[cut].Role != "user" {
 		cut++
 	}
-	a.History = a.History[cut:]
+	a.SetHistory(a.History[cut:])
 }
 
-func (a *Agent) Reset() { a.History = nil; tools.ResetTodos() }
+func (a *Agent) Reset() { a.SetHistory(nil); tools.ResetTodos() }
+
+// push appends to the history. Only the agent's own goroutine writes it; the lock
+// lets background agents read it (SystemPrompt) while a turn runs.
+func (a *Agent) push(m ...llm.Message) {
+	a.hmu.Lock()
+	a.History = append(a.History, m...)
+	a.hmu.Unlock()
+}
+
+// SetHistory replaces the history (resume, compact, trim, rewind).
+func (a *Agent) SetHistory(h []llm.Message) {
+	a.hmu.Lock()
+	a.History = h
+	a.hmu.Unlock()
+}
+
+// Push appends messages to the history (the host adds shell runs this way).
+func (a *Agent) Push(m ...llm.Message) { a.push(m...) }
+
+// historyCopy is a copy of the history that is safe to read from any goroutine.
+func (a *Agent) historyCopy() []llm.Message {
+	a.hmu.RLock()
+	defer a.hmu.RUnlock()
+	return append([]llm.Message(nil), a.History...)
+}
 
 func (a *Agent) Close() { a.Env.Jobs.StopAll() }

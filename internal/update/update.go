@@ -2,7 +2,10 @@
 package update
 
 import (
+	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,7 +36,7 @@ type release struct {
 	Assets []asset `json:"assets"`
 }
 
-// token finds a GitHub token for the private repo: env first, then the gh CLI.
+// token finds an optional GitHub token (avoids rate limits, works if the repo goes private): env first, then the gh CLI.
 func token() string {
 	for _, k := range []string{"BLAZE_GITHUB_TOKEN", "GITHUB_TOKEN", "GH_TOKEN"} {
 		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
@@ -72,7 +75,7 @@ func latest(ctx context.Context, tok string) (release, error) {
 	defer res.Body.Close()
 	if res.StatusCode == 404 || res.StatusCode == 401 {
 		if tok == "" {
-			return r, errors.New("the repo is private, so Blaze needs a GitHub token: run `gh auth login` once, or set GITHUB_TOKEN")
+			return r, errors.New("GitHub couldn't find the release; if the repo is private, run `gh auth login` once or set GITHUB_TOKEN")
 		}
 		return r, errors.New("GitHub refused the token (it needs read access to " + repo + ")")
 	}
@@ -183,10 +186,13 @@ func run(current string, force bool) (bool, error) {
 		ui.StepDone(true, "Blaze "+current+" is the newest version.", "", 0)
 		return false, nil
 	}
-	var a *asset
+	var a, sums *asset
 	for i := range rel.Assets {
-		if rel.Assets[i].Name == assetName() {
+		switch rel.Assets[i].Name {
+		case assetName():
 			a = &rel.Assets[i]
+		case "SHA256SUMS":
+			sums = &rel.Assets[i]
 		}
 	}
 	if a == nil {
@@ -212,12 +218,25 @@ func run(current string, force bool) (bool, error) {
 		return false, fmt.Errorf("can't write next to %s (%v); reinstall with the install script instead", self, err)
 	}
 	bar := ui.NewProgress("downloading", a.Size)
-	_, err = io.Copy(f, io.TeeReader(res.Body, bar))
+	h := sha256.New()
+	_, err = io.Copy(io.MultiWriter(f, h), io.TeeReader(res.Body, bar))
 	f.Close()
 	bar.Done()
 	if err != nil {
 		os.Remove(tmp)
 		return false, fmt.Errorf("download failed: %w", err)
+	}
+	// Releases from v0.8.1 on carry SHA256SUMS; older ones are only smoke-tested below.
+	if sums != nil {
+		want, err := fetchSum(ctx, *sums, assetName(), tok)
+		if err != nil {
+			os.Remove(tmp)
+			return false, fmt.Errorf("couldn't check the download (%v); the current build is kept", err)
+		}
+		if got := hex.EncodeToString(h.Sum(nil)); got != want {
+			os.Remove(tmp)
+			return false, errors.New("the download doesn't match the release checksum, so the current build is kept")
+		}
 	}
 	// Make sure the new file actually runs before swapping it in.
 	out, err := exec.Command(tmp, "version").Output()
@@ -230,6 +249,34 @@ func run(current string, force bool) (bool, error) {
 	}
 	ui.StepDone(true, "Updated to "+strings.TrimSpace(string(out)), "", 0)
 	return true, nil
+}
+
+// fetchSum downloads a release's SHA256SUMS and returns the hash listed for name.
+func fetchSum(ctx context.Context, a asset, name, tok string) (string, error) {
+	res, err := get(ctx, "https://api.github.com/repos/"+repo+"/releases/assets/"+strconv.FormatInt(a.ID, 10), "application/octet-stream", tok)
+	if err != nil {
+		return "", err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		return "", fmt.Errorf("SHA256SUMS: %s", res.Status)
+	}
+	return sumFor(io.LimitReader(res.Body, 1<<20), name)
+}
+
+// sumFor finds name's hash in sha256sum output ("<hex>  <name>", "*" marks binary mode).
+func sumFor(r io.Reader, name string) (string, error) {
+	sc := bufio.NewScanner(r)
+	for sc.Scan() {
+		f := strings.Fields(sc.Text())
+		if len(f) == 2 && strings.TrimPrefix(f[1], "*") == name && len(f[0]) == 64 {
+			return strings.ToLower(f[0]), nil
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return "", err
+	}
+	return "", fmt.Errorf("SHA256SUMS has no entry for %s", name)
 }
 
 // ---------- quiet daily check ----------
