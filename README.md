@@ -32,11 +32,13 @@ blaze login [email|google|github|--signup]   sign in to your Blaze account
 blaze whoami · blaze logout    who's signed in · sign out (here and in Blaze Desktop)
 blaze connect [app] [--manual] list connectors, or connect google / github / notion / slack / spotify
 blaze disconnect APP
+blaze skills [NAME]            skill library: list, show one, or on|off|delete|restore NAME
+blaze learn [on|off]           learn memories and skills automatically (shared with Desktop)
 ```
 `blaze update` (or `/update` in chat) uses `GITHUB_TOKEN`, or your `gh` login, while the repo is private.
 Blaze checks for a new version at most once a day and mentions it under the banner (`BLAZE_NO_UPDATE_CHECK=1` turns that off).
 Flags: `--autopilot` (or `--yolo`), `--plan`, `--model provider/model`.
-In chat: `/clear /model /plan /build /auto /autopilot /agents /login /whoami /logout /connect /notify /jobs /schedule /pc /doctor /setup /update /exit`. Ctrl-C stops the running task.
+In chat: `/clear /model /plan /build /auto /autopilot /agents /login /whoami /logout /connect /notify /skills /learn /jobs /schedule /pc /doctor /setup /update /exit`. Ctrl-C stops the running task.
 
 ### Modes (same as Blaze Desktop)
 | Mode | What it does |
@@ -72,6 +74,21 @@ on Windows) for finished background agents and when the agent calls `notify`, at
 10 minutes. `/notify text` sends a test. `/update` (or asking "update yourself", the `update_blaze` tool) downloads the build for
 this PC, checks it starts, swaps the binary atomically (one rename; on Windows the old exe is moved aside and restored if the
 swap fails) and restarts Blaze into the same chat.
+
+### Skills and learning (same as Blaze Desktop)
+Blaze ships the desktop's skill library (19 skills: code review, debugging, deep research, document and email writing,
+git/PR workflow, slide decks, landing pages, web design, writing tests and more). They are embedded in the binary and
+seeded into `~/.blaze/skills` on start; seeding is idempotent, a newer pack upgrades untouched skills, and a skill you
+edited, deleted or wrote yourself is never overwritten (`~/.blaze/skills/.bundled.json` tracks the pack). Only skills that
+match the conversation go into the prompt; the agent opens one with `load_skill`. `/skills` lists them, `/skills NAME` shows
+one, `/skills on|off|delete|restore NAME` manages them; restore brings back the bundled version.
+
+Blaze also learns as it goes: it saves durable facts (`remember`, replacing an outdated one instead of adding a second,
+`forget` on request, `recall` to search), and turns repeated or taught workflows into skills (`write_skill`). After an
+interactive turn a cheap local check decides whether a short reflection call is worth it (at most once a minute); changes
+show as a `◆ Remembered · …` / `◆ New skill · …` line. `/learn off` (or `blaze learn off`, or Blaze Desktop › Settings ›
+Behaviour › Learning) turns automatic learning off; Blaze then saves only when you ask. `BLAZE_LEARN=off|on` overrides it
+for one shell. The library is copied from Blaze Desktop with `scripts/sync-skills.sh [desktop-checkout | branch]`.
 
 ### Harness (borrowed from Claude Code)
 | | |
@@ -115,13 +132,13 @@ like `GEMINI_API_KEY` also work and set Blaze up with no questions. If no key wo
 `run_shell` (cwd sticks, right syntax per OS, background jobs), `job_log/job_input/job_stop`, `file_read/write/edit/list/search/delete`,
 `run_code` (Python venv / Node, installs packages), `git`, `install_tool` (package manager, asks first),
 `web_search`, `fetch_page`, `http_request`, `download_file`, `open_url`, `system_info`, `schedule`
-(Task Scheduler / cron), `remember/forget`, `use_skill/write_skill` (SKILL.md, same format as the app).
+(Task Scheduler / cron), `remember/forget/recall`, `load_skill/write_skill` (SKILL.md, same format as the app).
 
 Risky commands (sudo, rm -rf, format, registry edits, force-push, reset --hard), file writes outside the
 project folder, installs and deletes ask first.
 
 ## Files
-`~/.blaze/` (or `BLAZE_HOME`): `config.json`, `memory.md`, `skills/`, `schedule.json`, `logs/`, `venv/`.
+`~/.blaze/` (or `BLAZE_HOME`): `config.json`, `memory.md`, `skills/` (+ `.bundled.json`), `desktop.json` (shared settings such as `learn.off`), `learn-workflows.json`, `schedule.json`, `logs/`, `venv/`.
 
 ## Build
-Go 1.23. `go build .` CI cross-builds six targets on every push and publishes them as a GitHub release.
+Go 1.26+. `go build .` CI cross-builds six targets on every push and publishes them as a GitHub release.

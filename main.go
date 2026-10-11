@@ -38,6 +38,8 @@ func usage() {
 		ui.Accent("blaze doctor") + ui.Sub("                   check models, shell, tools"),
 		ui.Accent("blaze pc") + ui.Sub("                       what Blaze knows about this PC"),
 		ui.Accent("blaze schedule list|remove") + ui.Sub("     scheduled jobs"),
+		ui.Accent("blaze skills [name]") + ui.Sub("            skill library: list · show · on|off|delete|restore"),
+		ui.Accent("blaze learn [on|off]") + ui.Sub("           learn memories and skills automatically"),
 		ui.Accent("blaze login") + ui.Sub(" · ") + ui.Accent("logout") + ui.Sub(" · ") + ui.Accent("whoami") + ui.Sub("    your Blaze account (shared with Desktop)"),
 		ui.Accent("blaze connect [app]") + ui.Sub("            connect Google, GitHub, Notion, Slack…"),
 		ui.Accent("blaze update") + ui.Sub("                   get the newest Blaze"),
@@ -135,6 +137,13 @@ func main() {
 			ui.Println(ui.Sub("  Add jobs by asking Blaze, e.g. \"every day at 7 back up ~/notes to my drive\"."))
 		}
 		return
+	case "skills":
+		seedSkills()
+		skillsCmd(rest[1:])
+		return
+	case "learn":
+		learnCmd(rest[1:])
+		return
 	case "run-job":
 		if len(rest) < 2 {
 			os.Exit(2)
@@ -156,6 +165,7 @@ func main() {
 		}
 	}
 	cwd, _ := os.Getwd()
+	seedSkills() // bundled skill library (skills_cmd.go)
 	a := agent.New(cfg, &in, cwd, yolo)
 	defer a.Close()
 	if p := loadPrefs(); !yolo && !plan {
@@ -204,7 +214,7 @@ func accountCmd(cmd string, args []string) error {
 	return nil
 }
 
-var slashCmds = []string{"/agents", "/auto", "/autopilot", "/build", "/clear", "/compact", "/connect", "/disconnect", "/doctor", "/exit", "/help", "/init", "/jobs", "/login", "/logout", "/model", "/new", "/notify", "/pc", "/plan", "/quit", "/resume", "/schedule", "/setup", "/update", "/whoami", "/yolo"}
+var slashCmds = []string{"/agents", "/auto", "/autopilot", "/build", "/clear", "/compact", "/connect", "/disconnect", "/doctor", "/exit", "/help", "/init", "/jobs", "/learn", "/login", "/logout", "/model", "/new", "/notify", "/pc", "/plan", "/quit", "/resume", "/schedule", "/setup", "/skills", "/update", "/whoami", "/yolo"}
 
 func modelName(a *agent.Agent) string {
 	for _, e := range a.Cfg.RouteChain() {
@@ -495,6 +505,7 @@ func help() {
 		ui.Accent("/agents") + ui.Sub("    background agents: list · <name> · msg · cancel · resume · discard · new"),
 		ui.Accent("/login") + ui.Sub("     Blaze account   ") + ui.Accent("/whoami") + ui.Sub("   ") + ui.Accent("/logout") + ui.Sub("   ") + ui.Accent("/connect") + ui.Sub(" [app]"),
 		ui.Accent("/model") + ui.Sub("     show or switch models"),
+		ui.Accent("/skills") + ui.Sub("    skill library: list · <name> · on|off|delete|restore <name>   ") + ui.Accent("/learn") + ui.Sub(" [on|off]"),
 		ui.Accent("/jobs") + ui.Sub("      background jobs   ") + ui.Accent("/schedule") + ui.Sub(" scheduled jobs"),
 		ui.Accent("/pc") + ui.Sub("        this PC   ") + ui.Accent("/doctor") + ui.Sub(" check everything   ") + ui.Accent("/setup"),
 		ui.Accent("/update") + ui.Sub("    get the newest Blaze   ") + ui.Accent("/exit"),
@@ -588,6 +599,10 @@ func slash(a *agent.Agent, bg *bgAgents, line string, run func(string)) bool {
 		} else if ok {
 			restartAfterTurn = true // the REPL restarts into the new binary
 		}
+	case "/skills":
+		skillsCmd(f[1:])
+	case "/learn":
+		learnCmd(f[1:])
 	case "/jobs":
 		ui.Println(tools.Run(a.Env, "job_log", "{}"))
 	case "/schedule":
@@ -637,6 +652,7 @@ func runJob(cfg *config.Config, name string) int {
 		}
 		return 1
 	}
+	seedSkills()
 	a := agent.New(cfg, &in, dir, false)
 	a.Quiet = true
 	a.Env.Confirm = func(title, detail string) bool {

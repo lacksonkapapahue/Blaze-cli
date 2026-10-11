@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.5.0 — Skill library and proactive learning
+
+Brings Blaze Desktop v0.7.0's skill library and memory/skill learning to the terminal.
+
+- **Bundled skill library.** The desktop's 19 skills (SKILL.md + `skills/index.json`, with their assets) are embedded in the binary and seeded into `~/.blaze/skills`, the folder Blaze Desktop shares. Seeding is idempotent: a newer pack upgrades skills you haven't touched, an older binary never downgrades, and skills you edited, deleted or wrote yourself are never overwritten (`.bundled.json` manifest, sha256 over LF-normalised SKILL.md). Only skills that match the conversation go into the prompt; `load_skill` opens one.
+- **`/skills` and `blaze skills`:** list (state, version, update available), show one, `on|off|delete|restore NAME`.
+- **Proactive memory & skills.** Prompt rules tell Blaze to save durable facts as they appear, replace outdated ones (`remember(fact, replaces="#id")`), forget on request, `recall` saved facts, and turn repeated or taught workflows into skills. After an interactive turn a local check (no model call) decides whether a short reflection call is worth making (at most once a minute) and it saves, updates or creates from the answer. Changes print as `◆ Remembered · …`, `◆ Memory updated · …`, `◆ Forgot · …`, `◆ New skill · …`.
+- **Learning setting:** `/learn [on|off]` and `blaze learn [on|off]` write the same `desktop.json` `learn.off` the desktop's Settings › Behaviour › Learning uses (other settings in that file are kept). Off means Blaze saves only when asked. `BLAZE_LEARN=off|on` overrides it for one shell.
+- Plan mode allows `load_skill` and `recall` (read-only).
+- `scripts/sync-skills.sh [desktop-checkout | branch]` resyncs the pack from Blaze Desktop (main, falling back to `skills-library`).
+
 ## v0.4.0 — Desktop parity
 
 Brings Blaze Desktop v0.5.0's agent features to the terminal.

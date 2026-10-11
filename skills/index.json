@@ -1,0 +1,324 @@
+{
+  "format": 1,
+  "skills": [
+    {
+      "name": "api-integration",
+      "description": "Connect to a web API or webhook - read the docs, authenticate (API key, OAuth, bearer token), call endpoints with curl or code, handle pagination, rate limits, retries and errors, and store keys safely. Use when the user wants to automate a service (Shopify, Stripe, GitHub, Google, Notion, Telegram, any REST/GraphQL API) or build an integration.",
+      "tags": [
+        "api",
+        "rest",
+        "http",
+        "integration",
+        "automation",
+        "oauth"
+      ],
+      "version": 1,
+      "sha256": "714f7c5f84fa0f133379722f3681f25ce7df56b0eb68c61d7e7c41d6f0e852f4",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "code-review",
+      "description": "Review code changes - a diff, a branch, a pull request or a file - for bugs, security, performance, readability and tests, and report findings ranked by severity with concrete fixes. Use when the user asks to \"review\", \"check my code\", \"look over this PR\" or before merging Blaze's own work.",
+      "tags": [
+        "code",
+        "review",
+        "quality",
+        "security",
+        "git"
+      ],
+      "version": 1,
+      "sha256": "3e37831937cc73e6b08d6db1ed0ed0a98b58d1e4b4c6032679731807be4f858b",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "data-analysis",
+      "description": "Analyse data from CSV, Excel/Google Sheets exports, JSON or SQLite - clean it, answer questions with numbers, find trends and outliers, make charts and a short written summary. Use for \"analyse this spreadsheet\", sales/expense/traffic numbers, survey results, logs or any table of data.",
+      "tags": [
+        "data",
+        "csv",
+        "excel",
+        "spreadsheet",
+        "python",
+        "pandas",
+        "charts"
+      ],
+      "version": 1,
+      "sha256": "082e1f3699a53a7c4bfa80895e23916fd8e53a17766051b9a2b9f9e520894112",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "debugging",
+      "description": "Find and fix the root cause of a bug, crash, failing test, wrong output, build error or \"it worked yesterday\" - systematically, with a reproduction, one hypothesis at a time, and a regression test. Use whenever something is broken or behaves unexpectedly.",
+      "tags": [
+        "code",
+        "debugging",
+        "errors",
+        "testing",
+        "troubleshooting"
+      ],
+      "version": 1,
+      "sha256": "329da5e64d9e5a04df55d274ffee02a47faaf263b7595aed4d87bb2608ff9214",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "deep-research",
+      "description": "Research a question thoroughly on the web - compare options, check facts, survey a topic, find the best tool/product/price - and answer with sources for every claim. Use when the answer needs more than one search, the stakes are real, or the user asks for \"research\", \"compare\", \"find out\", \"is it true that\".",
+      "tags": [
+        "research",
+        "web",
+        "sources",
+        "fact-check",
+        "comparison"
+      ],
+      "version": 1,
+      "sha256": "971702c8de39058dd31f9856b7912e0460e2ac85056a5e167e6a08d5e19e5c3e",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "document-writing",
+      "description": "Write or edit a document - report, proposal, README, guide, essay, cover letter, SOP, meeting notes - that is clear, structured and ready to share as Markdown, DOCX or PDF. Use for any request to draft, rewrite, summarise or polish long-form text.",
+      "tags": [
+        "writing",
+        "docs",
+        "report",
+        "markdown",
+        "pdf",
+        "docx"
+      ],
+      "version": 1,
+      "sha256": "64f58d11e2bf93f37507c7f53cbb6b27fe2ff86d81a57d16a1f1b5be7a3fe63d",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "email-drafting",
+      "description": "Draft emails and messages - replies, follow-ups, cold outreach, client updates, complaints, requests, apologies, Slack/WhatsApp messages and freelance proposals (Upwork/Fiverr) - in the user's voice, short and clear, always shown for approval before anything is sent. Use for any \"write/reply to/answer this email or message\" request.",
+      "tags": [
+        "writing",
+        "email",
+        "messages",
+        "communication",
+        "freelance"
+      ],
+      "version": 1,
+      "sha256": "4abfbed395f54a1f871695f8eacfaa315a473a0f7723981a3a6474fae3b4f888",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "git-pr-workflow",
+      "description": "Day-to-day git and GitHub - branch, commit with good messages, rebase on main, resolve conflicts, push, open a pull request, watch CI, merge, tag a release, and undo mistakes safely. Use for any git or PR task, or when finishing a coding change.",
+      "tags": [
+        "git",
+        "github",
+        "pr",
+        "ci",
+        "release",
+        "version-control"
+      ],
+      "version": 1,
+      "sha256": "c29734355540e3c1036081280cfbb2b7ac988b93c0696124681d5d2d44c810a1",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "image-assets",
+      "description": "Create, convert and optimise images and visual assets - resize, crop, compress, convert (PNG/JPEG/WebP/AVIF/SVG/ICO), make favicons and app icons, social/OG images, product photos, screenshots, simple SVG logos and icons, background removal - with ImageMagick, ffmpeg, Python or SVG by hand. Use for any image or asset file task.",
+      "tags": [
+        "images",
+        "assets",
+        "svg",
+        "imagemagick",
+        "web",
+        "design"
+      ],
+      "version": 1,
+      "sha256": "fe06164a641159f999d948a5241bc01ed5eb3c407be94defef06b99a8fd037e0",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "landing-page-builder",
+      "description": "Build a single-file landing page (one index.html with inline CSS/JS) that is responsive, accessible and fast - for a product, event, portfolio, waitlist or offer. Use whenever the user wants \"a page\", \"a site\", \"a landing page\" or \"a one-pager\" and no framework is required.",
+      "tags": [
+        "web",
+        "html",
+        "css",
+        "landing-page",
+        "accessibility",
+        "performance"
+      ],
+      "version": 1,
+      "sha256": "be549b58047c72e84e8473908adb0a85a5f990a52a32f800a9e6bcca8f5519b0",
+      "files": [
+        "SKILL.md",
+        "assets/template.html"
+      ]
+    },
+    {
+      "name": "planning-task-breakdown",
+      "description": "Turn a goal or a big messy request into a concrete plan - milestones, ordered tasks with owners and estimates, dependencies, risks and the next action - and keep it updated as work happens. Use for projects, launches, study plans, \"how do I start\", multi-step coding work, or before any task that will take more than ~30 minutes.",
+      "tags": [
+        "planning",
+        "tasks",
+        "project-management",
+        "productivity"
+      ],
+      "version": 1,
+      "sha256": "a9bede6fd297dd0456c5ae610f7402eb732921ecdc64385540c2a18536402fb3",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "refactoring",
+      "description": "Restructure existing code without changing its behaviour - split large files or functions, remove duplication, rename, untangle dependencies, modernise APIs - in small, tested, reversible steps. Use when code is hard to change, before adding a feature to messy code, or when the user asks to \"clean up\" or \"refactor\".",
+      "tags": [
+        "code",
+        "refactoring",
+        "quality",
+        "architecture"
+      ],
+      "version": 1,
+      "sha256": "e0f8b9b1a433e3961834d6c54e98f0479667aa965a400c47a57a21fd6a195c20",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "shell-sysadmin",
+      "description": "Run and fix things on the user's computer across Windows (PowerShell), macOS and Linux including Arch - install software, manage services, disk space, processes, ports, networks, permissions, startup apps, scheduled jobs and updates - safely and with the right commands for that OS. Use for any \"my PC…\", \"install…\", \"why is X slow/full/broken\" or system-level task.",
+      "tags": [
+        "shell",
+        "sysadmin",
+        "windows",
+        "macos",
+        "linux",
+        "arch",
+        "powershell"
+      ],
+      "version": 1,
+      "sha256": "3d4e73d1b1172381d019be37f85c44a991047aa9ac47e4b9020a40cc32dac537",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "skill-creator",
+      "description": "How to write or improve a Blaze skill (SKILL.md) - when a workflow is worth saving, how to name and describe it so it's found, how to structure the steps, checklists and templates, and how to update it later. Use before calling write_skill, when the user says \"save this as a skill\" or teaches you a method, or when an existing skill turned out wrong.",
+      "tags": [
+        "skills",
+        "meta",
+        "writing",
+        "workflow"
+      ],
+      "version": 1,
+      "sha256": "82f3e808cf73c52aea4e7aa3d56b58f863533ffbf37c98716dd1edf657b142ea",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "slide-deck",
+      "description": "Make a presentation - pitch deck, class talk, project update or report-out - as a single self-contained HTML deck (arrow keys, fullscreen, print to PDF) or as .pptx when the user needs PowerPoint. Use for any \"slides\", \"deck\", \"presentation\" or \"pitch\" request.",
+      "tags": [
+        "slides",
+        "presentation",
+        "writing",
+        "design",
+        "pptx"
+      ],
+      "version": 1,
+      "sha256": "d34d2aba796ea445a4937fb6f3b2da3612cb6f9d17bd66f90cc8ea0fc18bb698",
+      "files": [
+        "SKILL.md",
+        "assets/deck.html"
+      ]
+    },
+    {
+      "name": "web-audit",
+      "description": "Audit a website or web app for accessibility, performance, SEO and basic security, then fix the top issues - with Lighthouse, axe, browser devtools and manual keyboard/screen-reader checks. Use when a page is slow, before launch, when the user asks \"is my site good/accessible/fast\", or after building a page.",
+      "tags": [
+        "web",
+        "accessibility",
+        "performance",
+        "seo",
+        "lighthouse",
+        "audit"
+      ],
+      "version": 1,
+      "sha256": "15c79e21a7786c25660b98443534cf118a6dc70bc871ac35c31bb8cbce8a20f3",
+      "files": [
+        "SKILL.md"
+      ]
+    },
+    {
+      "name": "web-design-blaze-classic",
+      "description": "Design or build pages, apps or components in the classic Blaze look from blazeinchue.netlify.app - paper #fcfcfc, ink #111110, one blue accent #1f4bd8, square edges, Inter + Inter Tight, mono uppercase labels, hairline-ruled grids and particle-dot hovers. Use for anything Blaze-branded or when the user asks for \"the Blaze style\".",
+      "tags": [
+        "design",
+        "web",
+        "css",
+        "brand",
+        "blaze"
+      ],
+      "version": 1,
+      "sha256": "44a556c2ef45c15cc1b451ff03c01c80a2ab62dd36ec04674ad09fd98dec40ca",
+      "files": [
+        "SKILL.md",
+        "assets/starter.html",
+        "assets/tokens.css"
+      ]
+    },
+    {
+      "name": "web-design-teamofkeys",
+      "description": "Design or build a website in the style of teamofkeys.com - near-black and white sections, one hot orange accent, huge tight sans headlines with one italic serif word, mono \"(labels)\", pill CTAs and slow scroll-driven motion. Use when the user asks for that look, a studio/agency feel, or names Team of Keys.",
+      "tags": [
+        "design",
+        "web",
+        "css",
+        "landing-page",
+        "agency",
+        "motion"
+      ],
+      "version": 1,
+      "sha256": "c829bb557cc9fb7adf56076d5fca52ba5ea23cc273bf35693e516540f3b4e6f2",
+      "files": [
+        "SKILL.md",
+        "assets/starter.html",
+        "assets/tokens.css"
+      ]
+    },
+    {
+      "name": "writing-tests",
+      "description": "Write or improve automated tests - unit, integration, table-driven, regression, snapshot or end-to-end - for Go, Python, JavaScript/TypeScript and others, so they catch real bugs and stay fast and reliable. Use when adding features, fixing bugs, raising coverage or when tests are flaky.",
+      "tags": [
+        "code",
+        "testing",
+        "go",
+        "python",
+        "javascript",
+        "quality"
+      ],
+      "version": 1,
+      "sha256": "f019f6117afe04b1e6e4cd433d5472fcb571a9a7979a57b3b125467755333610",
+      "files": [
+        "SKILL.md"
+      ]
+    }
+  ]
+}

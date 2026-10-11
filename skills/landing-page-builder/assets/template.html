@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Product - one-line promise</title>
+<meta name="description" content="Who it's for and the outcome, in one sentence under 155 characters.">
+<meta property="og:title" content="Product - one-line promise">
+<meta property="og:description" content="Who it's for and the outcome.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23111110'/%3E%3C/svg%3E">
+<style>
+:root { --bg: #fcfcfc; --fg: #111110; --muted: #5c5c58; --accent: #1f4bd8; --line: rgba(17,17,16,.12); --card: #fff; --radius: 0; --max: 72rem; --pad: clamp(1rem, 4vw, 3rem); }
+@media (prefers-color-scheme: dark) { :root { --bg: #26262a; --fg: #f0f0ee; --muted: #b4b4ae; --accent: #6b8cff; --line: rgba(240,240,238,.15); --card: #2e2e33; } }
+*, *::before, *::after { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 400 1rem/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; -webkit-font-smoothing: antialiased; }
+img { max-width: 100%; height: auto; display: block; }
+a { color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.skip { position: absolute; left: 1rem; top: -3rem; background: var(--fg); color: var(--bg); padding: .5rem 1rem; }
+.skip:focus { top: 1rem; }
+.wrap { width: min(var(--max), 100% - 2 * var(--pad)); margin-inline: auto; }
+h1, h2, h3 { line-height: 1.1; letter-spacing: -.02em; margin: 0 0 .5em; }
+h1 { font-size: clamp(2.4rem, 6vw, 4.5rem); max-width: 16ch; }
+h2 { font-size: clamp(1.7rem, 3.5vw, 2.6rem); }
+p { margin: 0 0 1em; }
+.muted { color: var(--muted); }
+.label { font: 500 .75rem/1 ui-monospace, Menlo, Consolas, monospace; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.btn { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: .75rem 1.25rem; border: 1px solid var(--fg); border-radius: var(--radius); background: var(--fg); color: var(--bg); font-weight: 600; text-decoration: none; transition: transform .2s ease, background .2s ease; }
+.btn:hover { transform: translateY(-1px); }
+.btn.ghost { background: transparent; color: var(--fg); border-color: var(--line); }
+header { position: sticky; top: 0; z-index: 10; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
+.bar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; min-height: 64px; }
+.bar nav { display: flex; gap: 1.5rem; }
+.bar nav a { text-decoration: none; color: var(--muted); }
+.bar nav a:hover { color: var(--fg); }
+section { padding-block: clamp(3.5rem, 9vw, 7rem); border-bottom: 1px solid var(--line); }
+.hero { display: grid; grid-template-columns: 1.1fr .9fr; gap: clamp(2rem, 5vw, 4rem); align-items: center; }
+.hero .sub { font-size: clamp(1.05rem, 1.6vw, 1.3rem); max-width: 46ch; color: var(--muted); }
+.ctas { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: 1.5rem; }
+.grid3 { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); }
+.grid3 > * { padding: 2rem 1.5rem; border-right: 1px solid var(--line); }
+.grid3 > :last-child { border-right: 0; }
+.steps { counter-reset: s; list-style: none; padding: 0; margin: 0; display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); }
+.steps li { counter-increment: s; background: var(--bg); padding: 1.5rem; display: grid; grid-template-columns: 3rem 1fr; }
+.steps li::before { content: counter(s, decimal-leading-zero); font-family: ui-monospace, Menlo, monospace; color: var(--accent); }
+blockquote { margin: 0; font-size: 1.2rem; }
+details { border-top: 1px solid var(--line); padding: 1rem 0; }
+details:last-of-type { border-bottom: 1px solid var(--line); }
+summary { cursor: pointer; font-weight: 600; min-height: 44px; display: flex; align-items: center; }
+footer { padding-block: 2rem 3rem; color: var(--muted); font-size: .9rem; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 1rem; }
+.reveal { transition: opacity .6s ease, transform .6s ease; }
+.js .reveal:not(.in) { opacity: 0; transform: translateY(12px); }
+@media (max-width: 48rem) { .hero, .grid3 { grid-template-columns: 1fr; } .grid3 > * { border-right: 0; border-bottom: 1px solid var(--line); } .bar nav { display: none; } }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } .reveal, .btn { transition: none; } .js .reveal:not(.in) { opacity: 1; transform: none; } }
+</style>
+<script>document.documentElement.classList.add('js')</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header><div class="wrap bar"><strong>Product</strong><nav aria-label="Primary"><a href="#how">How it works</a><a href="#faq">FAQ</a></nav><a class="btn" href="#cta">Primary action</a></div></header>
+<main id="main">
+  <section class="wrap hero" aria-labelledby="h1">
+    <div class="reveal"><p class="label">For [who]</p><h1 id="h1">The promise in eight words or fewer.</h1><p class="sub">One sentence: who it's for and the outcome they get.</p>
+      <div class="ctas"><a class="btn" href="#cta">Primary action</a><a class="btn ghost" href="#how">See how it works</a></div></div>
+    <img class="reveal" src="https://placehold.co/960x720/png?text=Product+screenshot" width="960" height="720" alt="[Describe the product screenshot]" fetchpriority="high">
+  </section>
+  <section class="wrap" aria-labelledby="why"><p class="label">Why</p><h2 id="why">Three outcomes, not features.</h2>
+    <div class="grid3 reveal"><div><h3>Outcome one</h3><p class="muted">One sentence on how.</p></div><div><h3>Outcome two</h3><p class="muted">One sentence on how.</p></div><div><h3>Outcome three</h3><p class="muted">One sentence on how.</p></div></div></section>
+  <section class="wrap" id="how" aria-labelledby="how-h"><p class="label">How it works</p><h2 id="how-h">Three steps.</h2>
+    <ol class="steps reveal"><li><div><h3>Step one</h3><p class="muted">What the user does.</p></div></li><li><div><h3>Step two</h3><p class="muted">What happens.</p></div></li><li><div><h3>Step three</h3><p class="muted">What they get.</p></div></li></ol></section>
+  <section class="wrap" aria-labelledby="proof"><p class="label">Proof</p><h2 id="proof">What people say.</h2>
+    <figure class="reveal"><blockquote>“[A real quote from a customer.]”</blockquote><figcaption class="muted">[Name], [Role]</figcaption></figure></section>
+  <section class="wrap" id="faq" aria-labelledby="faq-h"><p class="label">FAQ</p><h2 id="faq-h">Questions people ask first.</h2>
+    <details><summary>How much does it cost?</summary><p class="muted">Answer plainly.</p></details>
+    <details><summary>How long does it take?</summary><p class="muted">Answer plainly.</p></details>
+    <details><summary>What if it doesn't work for me?</summary><p class="muted">Answer plainly.</p></details></section>
+  <section class="wrap" id="cta" aria-labelledby="cta-h"><h2 id="cta-h">Repeat the promise.</h2><p class="muted">One line that lowers the risk of saying yes.</p><a class="btn" href="mailto:hello@example.com">Primary action</a></section>
+</main>
+<footer class="wrap"><span>© <span id="y">2026</span> Product</span><a href="mailto:hello@example.com">hello@example.com</a></footer>
+<script>
+document.getElementById('y').textContent = new Date().getFullYear();
+const io = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } }), { threshold: .15 });
+document.querySelectorAll('.reveal').forEach(el => io.observe(el));
+</script>
+</body>
+</html>
