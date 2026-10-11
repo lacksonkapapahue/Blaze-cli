@@ -1063,3 +1063,16 @@ func Thinking(step int, last string) string {
 	}
 	return "Working out the next step"
 }
+
+// Restoring is the working line while a rewind puts files back ("Restoring 3 files").
+func Restoring(n int) string { return "Restoring " + files(n) }
+
+// Restored is the line after a rewind ("Restored 3 files").
+func Restored(n int) string { return "Restored " + files(n) }
+
+func files(n int) string {
+	if n == 1 {
+		return "1 file"
+	}
+	return fmt.Sprintf("%d files", n)
+}

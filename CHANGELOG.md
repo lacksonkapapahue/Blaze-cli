@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.9.0 — Checkpoints: rewind code, chat or both
+
+- **Every message is a checkpoint (like Claude Code).** Before Blaze writes, edits or deletes a file it keeps the old
+  content (or notes the file didn't exist). Applying a specialist's changes counts as a change in that message; the
+  specialists' own worktrees aren't tracked.
+- **`/rewind`, or Esc twice on an empty prompt,** lists your messages newest first (time, what you said, how many files it
+  changed). Pick one with ↑ ↓ and Enter, then choose **Code and chat**, **Chat only** or **Code only**. Code goes back to how
+  it was before that message: edits are undone, files Blaze created are removed, files it deleted come back ("Restoring 3
+  files"). Chat goes back to just before the message and puts it back in the prompt so you can change it and send it again.
+- **`/undo`** rewinds the last message's code and chat in one step.
+- **Your own edits are never overwritten without asking.** If a file changed outside Blaze since the checkpoint, Blaze lists
+  it and asks: keep your changes, overwrite them, or cancel.
+- **In a git repo, shell commands are covered too.** Blaze takes a lightweight snapshot of the working tree at the start and
+  end of each message (a git tree under `refs/blaze/checkpoints/…`, written with a private index), so a rewind also undoes
+  what commands changed. Your index, branch, stash and files are never touched. Outside git only Blaze's own file edits are
+  tracked, and `/rewind` says so.
+- Checkpoints are kept in `~/.blaze/cli/checkpoints/` (`BLAZE_HOME` respected), one folder per chat, the same content stored
+  once; files over 5 MB are noted but not copied; chats untouched for 30 days are pruned. `blaze -c` and `/resume` pick up the
+  folder's last checkpoints, `/clear` starts fresh ones, and after `/compact` older messages can rewind code only.
+  `BLAZE_CHECKPOINTS=off` turns them off. In /help, the `/` menu and the README.
+- New `internal/checkpoint` package with tests: edit, create and delete restored; several messages; conflict detection (with
+  and without git); a git snapshot leaves the index, branch, status and stash alone; shell changes rewound; big files; a
+  deleted folder; pruning; chat cut back to the right message, even after old messages were trimmed.
+
 ## v0.8.0 — MCP servers
 
 - **Blaze can use MCP (Model Context Protocol) servers.** Add one with `blaze mcp add github -- npx -y

@@ -415,3 +415,28 @@ func AgentSystem(a *Agent) string {
 	}
 	return SubSystem(a.Handle)
 }
+
+// SpecialistFiles lists the files in the original folder that applying a finished
+// specialist's changes would write or delete (absolute paths), so the lead's turn
+// can checkpoint them first (v0.8.0). The specialist's own copy is never tracked.
+func (m *Manager) SpecialistFiles(name string) []string {
+	m.mu.Lock()
+	a := m.agents[CleanHandle(name)]
+	var iso *Isolation
+	if a != nil && a.Kind == Specialist && !Active(a.Status) {
+		iso = a.Iso
+	}
+	m.mu.Unlock()
+	if iso == nil {
+		return nil
+	}
+	cs, _, err := iso.Changes(0)
+	if err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(cs))
+	for _, c := range cs {
+		out = append(out, filepath.Join(iso.Source, filepath.FromSlash(c.Path)))
+	}
+	return out
+}

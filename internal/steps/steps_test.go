@@ -153,3 +153,15 @@ func TestThinking(t *testing.T) {
 		}
 	}
 }
+
+func TestRestoringPhrases(t *testing.T) {
+	if got := Restoring(3); got != "Restoring 3 files" {
+		t.Fatalf("Restoring(3) = %q", got)
+	}
+	if got := Restored(1); got != "Restored 1 file" {
+		t.Fatalf("Restored(1) = %q", got)
+	}
+	if !IsPlain(Restoring(2)) {
+		t.Fatal("restore phrase should be plain words")
+	}
+}

@@ -148,6 +148,10 @@ func Run(e *Env, name, rawArgs string) (out string) {
 
 // ---------- paths ----------
 
+// ExpandPath resolves a tool's path argument the way the file tools do (relative to
+// the current folder, ~ allowed).
+func ExpandPath(e *Env, path string) string { return expand(e, path) }
+
 func expand(e *Env, path string) string {
 	path = strings.TrimSpace(path)
 	if path == "" {
