@@ -578,7 +578,7 @@ func (e *Editor) render(final bool) {
 		glyph = "  " + glyph // line up with the box in the scrollback
 	}
 	pw := width(glyph)
-	n := W - 1 - pw // text columns per row
+	n := W - 1 - pw     // text columns per row
 	BW := min(W-3, 110) // box width, same as the welcome card
 	if boxed {
 		n = BW - 4 - pw

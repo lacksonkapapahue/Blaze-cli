@@ -38,7 +38,7 @@ var planTools = map[string]bool{
 	"see_screen": true, "screen_read": true, "read_screen": true, "screen_info": true,
 	"notify":      true, // a notification changes nothing on disk
 	"list_agents": true, // background agents: Plan may look, not start or steer them
-	"todo_write": true, "connector_tools": true, "suggest_connector": true,
+	"todo_write":  true, "connector_tools": true, "suggest_connector": true,
 }
 
 var gitReadOnly = map[string]bool{
@@ -198,4 +198,3 @@ func AsksUser(text string) bool {
 	}
 	return questionRe.MatchString(strings.TrimSpace(tail))
 }
-

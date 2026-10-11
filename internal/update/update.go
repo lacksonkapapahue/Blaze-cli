@@ -111,8 +111,63 @@ func parts(v string) [3]int {
 	return p
 }
 
+// Check asks GitHub for the newest release: its tag and whether it is newer than current.
+func Check(current string) (latestTag string, newer bool, err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	rel, err := latest(ctx, token())
+	if err != nil {
+		return "", false, err
+	}
+	saveCheck(rel.Tag)
+	return rel.Tag, current == "dev" || Newer(rel.Tag, current), nil
+}
+
+// Swap atomically replaces self with the verified file at tmp. On Unix this is one
+// rename (the running process keeps its old inode). Windows can't replace a running
+// .exe, so the old one is moved aside first and moved back if the swap fails.
+func Swap(self, tmp string) error {
+	if runtime.GOOS != "windows" {
+		if err := os.Rename(tmp, self); err != nil {
+			os.Remove(tmp)
+			return err
+		}
+		return nil
+	}
+	old := self + ".old"
+	os.Remove(old)
+	if err := os.Rename(self, old); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, self); err != nil {
+		_ = os.Rename(old, self) // roll back: the current version keeps working
+		os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+// Self is the path of the running binary, symlinks resolved.
+func Self() (string, error) {
+	self, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	if p, err := filepath.EvalSymlinks(self); err == nil {
+		self = p
+	}
+	return self, nil
+}
+
 // Run is `blaze update`: check, download with a progress bar, swap the binary.
-func Run(current string, force bool) error {
+// updated is true when a new binary was installed (restart to use it).
+func Run(current string, force bool) (updated bool, err error) {
+	updated, err = run(current, force)
+	return
+}
+
+func run(current string, force bool) (bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	var sp ui.Spinner
@@ -121,12 +176,12 @@ func Run(current string, force bool) error {
 	rel, err := latest(ctx, tok)
 	sp.Stop()
 	if err != nil {
-		return err
+		return false, err
 	}
 	saveCheck(rel.Tag)
 	if !force && current != "dev" && !Newer(rel.Tag, current) {
 		ui.StepDone(true, "Blaze "+current+" is the newest version.", "", 0)
-		return nil
+		return false, nil
 	}
 	var a *asset
 	for i := range rel.Assets {
@@ -135,29 +190,26 @@ func Run(current string, force bool) error {
 		}
 	}
 	if a == nil {
-		return fmt.Errorf("release %s has no build for %s/%s", rel.Tag, runtime.GOOS, runtime.GOARCH)
+		return false, fmt.Errorf("release %s has no build for %s/%s", rel.Tag, runtime.GOOS, runtime.GOARCH)
 	}
-	self, err := os.Executable()
+	self, err := Self()
 	if err != nil {
-		return err
-	}
-	if p, err := filepath.EvalSymlinks(self); err == nil {
-		self = p
+		return false, err
 	}
 	ui.Println("  " + ui.Sub(current+"  →  ") + ui.Accent(rel.Tag))
 
 	res, err := get(ctx, "https://api.github.com/repos/"+repo+"/releases/assets/"+strconv.FormatInt(a.ID, 10), "application/octet-stream", tok)
 	if err != nil {
-		return fmt.Errorf("download failed: %w", err)
+		return false, fmt.Errorf("download failed: %w", err)
 	}
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
-		return fmt.Errorf("download failed: %s", res.Status)
+		return false, fmt.Errorf("download failed: %s", res.Status)
 	}
 	tmp := self + ".new"
 	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
 	if err != nil {
-		return fmt.Errorf("can't write next to %s (%v); reinstall with the install script instead", self, err)
+		return false, fmt.Errorf("can't write next to %s (%v); reinstall with the install script instead", self, err)
 	}
 	bar := ui.NewProgress("downloading", a.Size)
 	_, err = io.Copy(f, io.TeeReader(res.Body, bar))
@@ -165,29 +217,19 @@ func Run(current string, force bool) error {
 	bar.Done()
 	if err != nil {
 		os.Remove(tmp)
-		return fmt.Errorf("download failed: %w", err)
+		return false, fmt.Errorf("download failed: %w", err)
 	}
 	// Make sure the new file actually runs before swapping it in.
 	out, err := exec.Command(tmp, "version").Output()
 	if err != nil || !strings.Contains(string(out), "blaze") {
 		os.Remove(tmp)
-		return errors.New("the downloaded build didn't start, so the current one is kept")
+		return false, errors.New("the downloaded build didn't start, so the current one is kept")
 	}
-	if runtime.GOOS == "windows" {
-		old := self + ".old"
-		os.Remove(old)
-		if err := os.Rename(self, old); err != nil {
-			os.Remove(tmp)
-			return err
-		}
-	}
-	if err := os.Rename(tmp, self); err != nil {
-		os.Remove(tmp)
-		return err
+	if err := Swap(self, tmp); err != nil {
+		return false, fmt.Errorf("couldn't swap in the new build (%v); the current one is kept", err)
 	}
 	ui.StepDone(true, "Updated to "+strings.TrimSpace(string(out)), "", 0)
-	ui.Println("  " + ui.Weak("Restart blaze to use it."))
-	return nil
+	return true, nil
 }
 
 // ---------- quiet daily check ----------

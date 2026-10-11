@@ -25,10 +25,10 @@ type Host struct {
 	// context, so a host can route the card to whoever made the call (the CLI shows
 	// a background agent's approvals on that agent, not over the prompt).
 	ConfirmCtx func(ctx context.Context, title, detail string, allowAlways bool) (yes, always bool)
-	Yolo    func() bool   // the auto-approve setting
-	Focus   func()        // bring Blaze to the front after a browser sign-in
-	Dir     func() string // working folder for local MCP servers
-	Version string
+	Yolo       func() bool   // the auto-approve setting
+	Focus      func()        // bring Blaze to the front after a browser sign-in
+	Dir        func() string // working folder for local MCP servers
+	Version    string
 }
 
 // Manager owns the catalog, the sign-ins, the MCP connections and the tool proxy.

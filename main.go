@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/lacksonkapapahue/blaze-cli/internal/agent"
+	"github.com/lacksonkapapahue/blaze-cli/internal/agents"
 	"github.com/lacksonkapapahue/blaze-cli/internal/config"
 	"github.com/lacksonkapapahue/blaze-cli/internal/llm"
 	"github.com/lacksonkapapahue/blaze-cli/internal/sched"
@@ -37,11 +38,14 @@ func usage() {
 		ui.Accent("blaze doctor") + ui.Sub("                   check models, shell, tools"),
 		ui.Accent("blaze pc") + ui.Sub("                       what Blaze knows about this PC"),
 		ui.Accent("blaze schedule list|remove") + ui.Sub("     scheduled jobs"),
+		ui.Accent("blaze login") + ui.Sub(" · ") + ui.Accent("logout") + ui.Sub(" · ") + ui.Accent("whoami") + ui.Sub("    your Blaze account (shared with Desktop)"),
+		ui.Accent("blaze connect [app]") + ui.Sub("            connect Google, GitHub, Notion, Slack…"),
 		ui.Accent("blaze update") + ui.Sub("                   get the newest Blaze"),
 		ui.Accent("blaze version"),
 	})
 	ui.Box(ui.AccentLabel("flags"), []string{
-		ui.Ink("--yolo") + ui.Sub("            start with auto-approve on (deletes still ask)"),
+		ui.Ink("--autopilot") + ui.Sub("       nothing asks; catastrophic actions stay blocked (--yolo too)"),
+		ui.Ink("--plan") + ui.Sub("            start in Plan mode: look and propose, change nothing"),
 		ui.Ink("--model p/model") + ui.Sub("   try this model first"),
 		ui.Ink("-c, --continue") + ui.Sub("    pick up this folder's last conversation"),
 	})
@@ -51,13 +55,15 @@ func main() {
 	ui.Init()
 	defer ui.ShowCursor()
 	args := os.Args[1:]
-	yolo, cont := false, false
+	yolo, cont, plan := false, false, false
 	var model string
 	var rest []string
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; {
-		case a == "--yolo" || a == "-y":
+		case a == "--yolo" || a == "-y" || a == "--autopilot":
 			yolo = true
+		case a == "--plan":
+			plan = true
 		case a == "--continue" || a == "-c" || a == "--resume" || a == "-r":
 			cont = true
 		case a == "--model" && i+1 < len(args):
@@ -84,8 +90,18 @@ func main() {
 		return
 	case "update", "upgrade":
 		force := len(rest) > 1 && (rest[1] == "--force" || rest[1] == "-f")
-		if err := update.Run(version, force); err != nil {
+		ok, err := update.Run(version, force)
+		if err != nil {
 			ui.Println("  " + ui.Ink("■ ") + ui.Sub(err.Error()))
+			os.Exit(1)
+		}
+		if ok {
+			ui.Println("  " + ui.Weak("Run blaze to use it."))
+		}
+		return
+	case "login", "logout", "whoami", "connect", "disconnect":
+		if err := accountCmd(cmd, rest[1:]); err != nil {
+			fail(err.Error())
 			os.Exit(1)
 		}
 		return
@@ -142,6 +158,15 @@ func main() {
 	cwd, _ := os.Getwd()
 	a := agent.New(cfg, &in, cwd, yolo)
 	defer a.Close()
+	if p := loadPrefs(); !yolo && !plan {
+		a.Env.Plan = p.WorkMode == "plan"
+		if p.Approval == "autopilot" {
+			a.Approval = "autopilot"
+		}
+	}
+	if plan {
+		a.Env.Plan = true
+	}
 
 	// One-shot: everything after the flags is the task (stdin is appended when piped).
 	if len(rest) > 0 {
@@ -151,6 +176,7 @@ func main() {
 				prompt += "\n\n<stdin>\n" + string(b) + "\n</stdin>"
 			}
 		}
+		wire(a, false)
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer stop()
 		if _, err := a.Ask(ctx, prompt); err != nil {
@@ -159,10 +185,26 @@ func main() {
 		}
 		return
 	}
-	repl(a, in, cont)
+	repl(a, wire(a, true), in, cont)
 }
 
-var slashCmds = []string{"/clear", "/compact", "/doctor", "/exit", "/help", "/init", "/jobs", "/model", "/new", "/pc", "/plan", "/quit", "/resume", "/schedule", "/setup", "/update", "/yolo"}
+func accountCmd(cmd string, args []string) error {
+	switch cmd {
+	case "login":
+		return cmdLogin(args)
+	case "logout":
+		return cmdLogout()
+	case "whoami":
+		return cmdWhoami()
+	case "connect":
+		return cmdConnect(args)
+	case "disconnect":
+		return cmdDisconnect(args)
+	}
+	return nil
+}
+
+var slashCmds = []string{"/agents", "/auto", "/autopilot", "/build", "/clear", "/compact", "/connect", "/disconnect", "/doctor", "/exit", "/help", "/init", "/jobs", "/login", "/logout", "/model", "/new", "/notify", "/pc", "/plan", "/quit", "/resume", "/schedule", "/setup", "/update", "/whoami", "/yolo"}
 
 func modelName(a *agent.Agent) string {
 	for _, e := range a.Cfg.RouteChain() {
@@ -176,31 +218,12 @@ func modelName(a *agent.Agent) string {
 	return "no model yet"
 }
 
-// mode cycles like Claude Code's Shift-Tab: ask first → auto-approve → plan.
-func mode(a *agent.Agent) string {
-	switch {
-	case a.Env.Plan:
-		return "plan"
-	case a.Env.Yolo:
-		return "auto"
-	}
-	return "ask"
-}
-
-func cycleMode(a *agent.Agent) {
-	switch mode(a) {
-	case "ask":
-		a.Env.Yolo, a.Env.Plan = true, false
-	case "auto":
-		a.Env.Yolo, a.Env.Plan = false, true
-	default:
-		a.Env.Yolo, a.Env.Plan = false, false
-	}
-}
-
-func repl(a *agent.Agent, in sysinfo.Info, cont bool) {
+func repl(a *agent.Agent, bg *bgAgents, in sysinfo.Info, cont bool) {
 	ui.Welcome(version, modelName(a), in.OSName+" · "+in.Shell+" · "+shortPath(a.Env.Root),
-		ui.Weak("/ commands  ·  @ files  ·  ! shell  ·  # remember  ·  ⇧tab plan mode"))
+		ui.Weak("/ commands  ·  @ files  ·  ! shell  ·  # remember  ·  ⇧tab modes  ·  /agents"))
+	ui.FocusReporting(true)
+	defer ui.FocusReporting(false)
+	bg.startupNotice()
 	if tag := update.Hint(version); tag != "" {
 		ui.Println("  " + ui.Accent("■ ") + ui.Ink("Blaze "+tag+" is out. ") + ui.Sub("Type ") + ui.Accent("/update") + ui.Sub(" to get it."))
 	}
@@ -218,6 +241,8 @@ func repl(a *agent.Agent, in sysinfo.Info, cont bool) {
 		switch {
 		case a.Env.Plan:
 			return ui.Accent("▤ ")
+		case a.Autopilot():
+			return ui.Accent("» ")
 		}
 		return ui.Accent("› ")
 	}
@@ -228,13 +253,17 @@ func repl(a *agent.Agent, in sysinfo.Info, cont bool) {
 		case strings.HasPrefix(line, "#"):
 			return "  " + ui.Accent("# memory") + ui.Weak(" · Blaze keeps this for next time")
 		}
-		switch mode(a) {
-		case "auto":
-			return "  " + ui.Accent("⏵⏵ auto-approve on") + ui.Weak(" (shift+tab to cycle)")
-		case "plan":
-			return "  " + ui.Accent("▤ plan mode on") + ui.Weak(" (shift+tab to cycle)")
+		tail := ""
+		if st := bg.statusLine(); st != "" {
+			tail = ui.Weak("  ·  ") + st
 		}
-		return "  " + ui.Weak("? /help · @ files · ! shell · # remember · shift+tab modes")
+		switch {
+		case a.Env.Plan:
+			return "  " + ui.Accent("▤ plan") + ui.Weak(" · read and propose, nothing changes (shift+tab)") + tail
+		case a.Autopilot():
+			return "  " + ui.Accent("⏵⏵ build · autopilot") + ui.Weak(" · nothing asks (shift+tab)") + tail
+		}
+		return "  " + ui.Weak("build · auto · ? /help · @ files · ! shell · # remember · shift+tab modes") + tail
 	}
 
 	// Ctrl-C cancels the running turn (the prompt reads Ctrl-C itself).
@@ -258,7 +287,9 @@ func repl(a *agent.Agent, in sysinfo.Info, cont bool) {
 		mu.Lock()
 		cancel = c
 		mu.Unlock()
+		restore := ui.Quiet()
 		_, err := a.Ask(ctx, prompt)
+		restore()
 		mu.Lock()
 		cancel = nil
 		mu.Unlock()
@@ -272,14 +303,19 @@ func repl(a *agent.Agent, in sysinfo.Info, cont bool) {
 			}
 			return
 		}
-		// Plan mode ends like Claude Code's: approve the plan and switch to acting.
-		if a.Env.Plan {
+		if restartAfterTurn {
+			return
+		}
+		// Plan mode ends like Claude Code's: approve the plan and switch to Build.
+		if a.Env.Plan && !strings.HasPrefix(prompt, agents.ResultPrefix) {
 			ui.Println("")
-			switch ui.Choose("  "+ui.Ink("Go ahead with this plan?")+"  ", []string{"Yes, auto-approve", "Yes, ask me", "Keep planning"}, 1, 2) {
+			switch ui.Choose("  "+ui.Ink("Go ahead with this plan?")+"  ", []string{"Yes, Autopilot", "Yes, ask me (Auto)", "Keep planning"}, 1, 2) {
 			case 0:
-				a.Env.Plan, a.Env.Yolo = false, true
+				setWork(a, false)
+				setApproval(a, true)
 			case 1:
-				a.Env.Plan, a.Env.Yolo = false, false
+				setWork(a, false)
+				setApproval(a, false)
 			default:
 				return
 			}
@@ -287,19 +323,42 @@ func repl(a *agent.Agent, in sysinfo.Info, cont bool) {
 		}
 	}
 
+	// wake runs what background agents left for the main loop: their approvals and
+	// questions first, then each finished agent's result as its own turn.
+	wake := func() {
+		for bg.pending() {
+			bg.drainAsks()
+			if v, ok := bg.nextResult(); ok {
+				ui.Println("\n  " + ui.Accent("▸ ") + ui.Ink("agent "+v.Handle+" "+v.Status) + ui.Weak(" · Blaze reads its report"))
+				run(agents.ResultMessage(v))
+			}
+		}
+	}
 	lastIdle := time.Time{}
 	for {
+		if restartAfterTurn {
+			restartNow(a, bg)
+			return
+		}
 		line, err := ed.Read(ui.Prompt())
+		if errors.Is(err, ui.ErrWake) {
+			wake()
+			continue
+		}
 		if errors.Is(err, ui.ErrInterrupt) {
 			if time.Since(lastIdle) < 2*time.Second {
-				ui.Goodbye()
-				return
+				if confirmQuit(bg) {
+					ui.Goodbye()
+					return
+				}
+				continue
 			}
 			lastIdle = time.Now()
 			ui.Println("  " + ui.Weak("Ctrl-C again to quit"))
 			continue
 		}
 		if err != nil {
+			bg.m.StopAll()
 			ui.Goodbye()
 			return
 		}
@@ -322,9 +381,11 @@ func repl(a *agent.Agent, in sysinfo.Info, cont bool) {
 			}
 			continue
 		case strings.HasPrefix(line, "/"):
-			if slash(a, line, run) {
-				ui.Goodbye()
-				return
+			if slash(a, bg, line, run) {
+				if confirmQuit(bg) {
+					ui.Goodbye()
+					return
+				}
 			}
 			continue
 		}
@@ -429,8 +490,10 @@ func help() {
 		ui.Accent("/resume") + ui.Sub("    reload this folder's last conversation"),
 		ui.Accent("/compact") + ui.Sub("   summarise the chat to free up context"),
 		ui.Accent("/init") + ui.Sub("      write BLAZE.md: how this project builds, tests, runs"),
-		ui.Accent("/plan") + ui.Sub("      plan mode on/off (look, then propose; nothing changes)"),
-		ui.Accent("/yolo") + ui.Sub("      auto-approve on/off"),
+		ui.Accent("/plan") + ui.Sub("      Plan mode (look, then propose; nothing changes)   ") + ui.Accent("/build"),
+		ui.Accent("/auto") + ui.Sub("      risky actions ask   ") + ui.Accent("/autopilot") + ui.Sub(" nothing asks (catastrophic stays blocked)"),
+		ui.Accent("/agents") + ui.Sub("    background agents: list · <name> · msg · cancel · resume · discard · new"),
+		ui.Accent("/login") + ui.Sub("     Blaze account   ") + ui.Accent("/whoami") + ui.Sub("   ") + ui.Accent("/logout") + ui.Sub("   ") + ui.Accent("/connect") + ui.Sub(" [app]"),
 		ui.Accent("/model") + ui.Sub("     show or switch models"),
 		ui.Accent("/jobs") + ui.Sub("      background jobs   ") + ui.Accent("/schedule") + ui.Sub(" scheduled jobs"),
 		ui.Accent("/pc") + ui.Sub("        this PC   ") + ui.Accent("/doctor") + ui.Sub(" check everything   ") + ui.Accent("/setup"),
@@ -440,14 +503,29 @@ func help() {
 		ui.Ink("@path") + ui.Sub("         attach a file or folder (tab completes)"),
 		ui.Ink("!command") + ui.Sub("      run it yourself; Blaze sees the output"),
 		ui.Ink("#note") + ui.Sub("         remember this for next time"),
-		ui.Ink("shift+tab") + ui.Sub("     cycle: ask first → auto-approve → plan"),
+		ui.Ink("shift+tab") + ui.Sub("     cycle: build·auto → build·autopilot → plan"),
 		ui.Ink("↑ ↓") + ui.Sub("           history   ") + ui.Ink("→ / tab") + ui.Sub(" accept suggestion"),
 		ui.Ink("ctrl+← →") + ui.Sub("      jump words   ") + ui.Ink("ctrl+w/u/k") + ui.Sub(" cut   ") + ui.Ink("ctrl+l") + ui.Sub(" clear"),
 		ui.Ink("ctrl+c") + ui.Sub("        stop a task · twice on an empty line quits"),
 	})
 }
 
-func slash(a *agent.Agent, line string, run func(string)) bool {
+// confirmQuit asks before quitting while background agents run (they'd stop and
+// show as interrupted next time, with /agents resume).
+func confirmQuit(bg *bgAgents) bool {
+	r, q := bg.m.Running()
+	if r+q == 0 {
+		return true
+	}
+	ui.Println("  " + ui.Ink(fmt.Sprintf("%d background agent%s still working.", r+q, plural(r+q))))
+	if ui.Choose("  "+ui.Ink("Quit anyway? They stop and can be resumed next time.")+"  ", []string{"Quit", "Stay"}, 1, 1) != 0 {
+		return false
+	}
+	bg.m.StopAll()
+	return true
+}
+
+func slash(a *agent.Agent, bg *bgAgents, line string, run func(string)) bool {
 	f := strings.Fields(line)
 	switch f[0] {
 	case "/exit", "/quit", "/q":
@@ -470,17 +548,33 @@ func slash(a *agent.Agent, line string, run func(string)) bool {
 	case "/init":
 		run("Look around this project (file_list, read the README, build files and a few key sources) and write BLAZE.md in the project root for future sessions: what the project is, how to install, build, test and run it (exact commands), the layout of important folders, and conventions to follow. Under 60 lines, plain Markdown. If BLAZE.md exists, improve it instead.")
 	case "/plan":
-		a.Env.Plan = !a.Env.Plan
-		if a.Env.Plan {
-			a.Env.Yolo = false
+		setWork(a, !a.Env.Plan)
+		ui.Step("Work mode: " + map[bool]string{true: "Plan (read and scout only; nothing changes).", false: "Build (every tool)."}[a.Env.Plan])
+	case "/build":
+		setWork(a, false)
+		ui.Step("Work mode: Build (every tool).")
+	case "/auto":
+		setApproval(a, false)
+		ui.Step("Approval mode: Auto (risky actions ask first).")
+	case "/autopilot", "/yolo":
+		setApproval(a, !a.Autopilot() || f[0] == "/autopilot")
+		if a.Autopilot() {
+			ui.Step("Approval mode: Autopilot (nothing asks; catastrophic actions stay blocked; questions get \"decide yourself\").")
+		} else {
+			ui.Step("Approval mode: Auto (risky actions ask first).")
 		}
-		ui.Step(fmt.Sprintf("Plan mode is %s.", map[bool]string{true: "on", false: "off"}[a.Env.Plan]))
-	case "/yolo":
-		a.Env.Yolo = !a.Env.Yolo
-		if a.Env.Yolo {
-			a.Env.Plan = false
+	case "/agents":
+		bg.command(f[1:])
+	case "/login", "/logout", "/whoami", "/connect", "/disconnect":
+		if err := accountCmd(strings.TrimPrefix(f[0], "/"), f[1:]); err != nil {
+			fail(err.Error())
 		}
-		ui.Step(fmt.Sprintf("Auto-approve is %s (deletes still ask).", map[bool]string{true: "on", false: "off"}[a.Env.Yolo]))
+	case "/notify":
+		msg := strings.TrimSpace(strings.TrimPrefix(line, f[0]))
+		if msg == "" {
+			msg = "Notifications work."
+		}
+		ui.Println("  " + ui.Sub(runNotify(fmt.Sprintf(`{"title":"Blaze","body":%q}`, msg))))
 	case "/pc":
 		setup.ShowPC(*a.Env.Info)
 	case "/doctor":
@@ -488,8 +582,11 @@ func slash(a *agent.Agent, line string, run func(string)) bool {
 	case "/setup":
 		setup.Run(a.Cfg, a.Env.Info)
 	case "/update":
-		if err := update.Run(version, len(f) > 1 && f[1] == "--force"); err != nil {
+		ok, err := update.Run(version, len(f) > 1 && f[1] == "--force")
+		if err != nil {
 			ui.Println("  " + ui.Ink("■ ") + ui.Sub(err.Error()))
+		} else if ok {
+			restartAfterTurn = true // the REPL restarts into the new binary
 		}
 	case "/jobs":
 		ui.Println(tools.Run(a.Env, "job_log", "{}"))
