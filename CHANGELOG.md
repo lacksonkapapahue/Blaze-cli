@@ -8,6 +8,9 @@
   OpenRouter's free ones) were never chosen by the model picker.
 - **Releases are never overwritten.** CI used to delete and re-create the release for the current VERSION on every push to
   main; now it publishes only when VERSION names a new release.
+- **Two data races fixed** (found by the new race-detector run): background agents read the main chat's history to build
+  their prompt while the main chat was writing it, and a local MCP server's process was waited on twice when it was
+  stopped. History writes now go through a lock, and the server is waited on once.
 - CI runs the tests with `-race` and runs staticcheck. First tests for `internal/llm` (streaming, tool-call assembly, error
   cleanup, model picking) and for checksum parsing. Dead code removed; README and installers no longer say the repo is private.
 

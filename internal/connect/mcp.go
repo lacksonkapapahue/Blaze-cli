@@ -568,7 +568,9 @@ func dialStdio(command string, argv []string, dir string) (*streamPeer, *ringBuf
 		_, err := stdin.Write(append(b, '\n'))
 		return err
 	}
+	exited := make(chan struct{}) // closed once cmd.Wait returned (Wait may only be called once)
 	go func() {
+		defer close(exited)
 		sc := bufio.NewScanner(stdout)
 		sc.Buffer(make([]byte, 64*1024), 32<<20)
 		for sc.Scan() {
@@ -586,14 +588,11 @@ func dialStdio(command string, argv []string, dir string) (*streamPeer, *ringBuf
 	}()
 	p.closeFn = func() {
 		_ = stdin.Close()
-		done := make(chan struct{})
-		go func() { _ = cmd.Wait(); close(done) }()
 		select {
-		case <-done:
+		case <-exited:
 		case <-time.After(2 * time.Second):
-			if cmd.Process != nil {
-				_ = cmd.Process.Kill()
-			}
+			_ = cmd.Process.Kill()
+			<-exited
 		}
 	}
 	return p, logs, nil

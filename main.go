@@ -511,7 +511,7 @@ func shellMode(a *agent.Agent, cmd string) {
 	if len(rec) > 8000 {
 		rec = rec[:4000] + "\n…\n" + rec[len(rec)-4000:]
 	}
-	a.History = append(a.History, llm.Message{Role: "user", Content: "<shell>\n$ " + cmd + "\n" + rec + "\n</shell>\n(I ran this myself; no reply needed unless I ask.)"},
+	a.Push(llm.Message{Role: "user", Content: "<shell>\n$ " + cmd + "\n" + rec + "\n</shell>\n(I ran this myself; no reply needed unless I ask.)"},
 		llm.Message{Role: "assistant", Content: "Noted."})
 	a.Save()
 }

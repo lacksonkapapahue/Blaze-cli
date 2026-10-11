@@ -61,7 +61,7 @@ func (a *Agent) Resume() (int, error) {
 	if err := json.Unmarshal(b, &h); err != nil {
 		return 0, err
 	}
-	a.History = h
+	a.SetHistory(h)
 	return len(h), nil
 }
 
@@ -104,10 +104,10 @@ func (a *Agent) Compact(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	before := len(a.History)
-	a.History = []llm.Message{
+	a.SetHistory([]llm.Message{
 		{Role: "user", Content: "Summary of our conversation so far:\n\n" + r.Text},
 		{Role: "assistant", Content: "Got it, I have the context. What next?"},
-	}
+	})
 	a.Save()
 	return before, nil
 }
