@@ -361,7 +361,26 @@ type particle struct {
 
 // Welcome is the boxed start screen: the B mark with particles floating over
 // it (like the site's buttons), a glitching eyebrow, the headline and context.
-func Welcome(version, model, where, tips string) {
+func Welcome(version, model, where, tips string) { welcome(version, model, where, tips, Animate()) }
+
+// Redraw wipes the screen and the terminal's scrollback and draws the start screen
+// again, without the intro animation, so /clear leaves nothing of the old chat behind.
+func Redraw(version, model, where, tips string) {
+	ClearScreen()
+	welcome(version, model, where, tips, false)
+}
+
+// ClearScreen erases the visible screen and the scrollback and homes the cursor.
+// The last turn's Ctrl+O details are dropped too: they belong to the old screen.
+func ClearScreen() {
+	if !IsTTY() {
+		return
+	}
+	Printf("\x1b[H\x1b[2J\x1b[3J")
+	SetActivity(nil)
+}
+
+func welcome(version, model, where, tips string, anim bool) {
 	W := termWidth()
 	if W < 58 {
 		BannerAnimated(version, where)
@@ -438,7 +457,7 @@ func Welcome(version, model, where, tips string) {
 	height := rowsN + 5
 
 	Println("")
-	if !Animate() {
+	if !anim {
 		Printf("%s", frame(0, nil, nil, 99))
 		return
 	}

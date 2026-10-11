@@ -114,7 +114,7 @@ for one shell. The library is copied from Blaze Desktop with `scripts/sync-skill
 | `!command` | run a command yourself; Blaze sees the output |
 | `#note` | save a note to Blaze's memory |
 | `BLAZE.md` | project instructions loaded every session (`AGENTS.md` / `CLAUDE.md` also work; `~/.blaze/BLAZE.md` is global). `/init` writes one |
-| `/compact` | summarise the chat to free context · `/resume` or `blaze -c` continues this folder's last chat |
+| `/clear` | new conversation on a freshly cleared screen (scrollback too) · `/compact` summarise the chat to free context · `/resume` or `blaze -c` continues this folder's last chat |
 
 ### Keys at the prompt
 | Key | Does |

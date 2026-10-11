@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.7.2 — /clear really clears
+
+- **`/clear` (and `/new`) now wipe the terminal and start over.** Besides starting a new conversation, Blaze erases the
+  screen and the terminal's scrollback and draws the start screen again (no intro animation), so old replies, menus and
+  half-drawn boxes are gone. The last turn's Ctrl+O details are dropped with them. When output isn't a terminal it just
+  prints "New conversation." as before.
+
 ## v0.7.1 — No more "thinking": plain words from the first second
 
 - **The working line never says "thinking" or "writing" any more.** While the model decides what to do, Blaze now says it in

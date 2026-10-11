@@ -224,9 +224,17 @@ func accountCmd(cmd string, args []string) error {
 
 var slashCmds = []string{"/agents", "/auto", "/autopilot", "/build", "/clear", "/compact", "/connect", "/disconnect", "/doctor", "/exit", "/help", "/init", "/jobs", "/keys", "/learn", "/login", "/logout", "/model", "/new", "/notify", "/pc", "/plan", "/quit", "/resume", "/schedule", "/setup", "/skills", "/update", "/whoami", "/yolo"}
 
+// welcomeWhere is the start screen's context line (OS · shell · folder), kept so
+// /clear can draw the same start screen again.
+var welcomeWhere string
+
+func welcomeTips() string {
+	return ui.Weak("/ commands  ·  @ files  ·  ! shell  ·  # remember  ·  ⇧tab modes  ·  /agents")
+}
+
 func repl(a *agent.Agent, bg *bgAgents, in sysinfo.Info, cont bool) {
-	ui.Welcome(version, modelName(a), in.OSName+" · "+in.Shell+" · "+shortPath(a.Env.Root),
-		ui.Weak("/ commands  ·  @ files  ·  ! shell  ·  # remember  ·  ⇧tab modes  ·  /agents"))
+	welcomeWhere = in.OSName + " · " + in.Shell + " · " + shortPath(a.Env.Root)
+	ui.Welcome(version, modelName(a), welcomeWhere, welcomeTips())
 	ui.FocusReporting(true)
 	defer ui.FocusReporting(false)
 	bg.startupNotice()
@@ -558,7 +566,13 @@ func slash(a *agent.Agent, bg *bgAgents, line string, run func(string)) bool {
 		return true
 	case "/clear", "/new":
 		a.Reset()
-		ui.Step("New conversation.")
+		// Start over on a clean terminal: screen and scrollback wiped, the start
+		// screen drawn again, so nothing of the old chat (or menus) is left behind.
+		if ui.IsTTY() && welcomeWhere != "" {
+			ui.Redraw(version, modelName(a), welcomeWhere, welcomeTips())
+		} else {
+			ui.Step("New conversation.")
+		}
 	case "/resume", "/continue":
 		resume(a)
 	case "/compact":
