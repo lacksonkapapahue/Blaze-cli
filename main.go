@@ -243,6 +243,7 @@ func repl(a *agent.Agent, bg *bgAgents, in sysinfo.Info, cont bool) {
 	ed := &ui.Editor{
 		HistoryFile: filepath.Join(config.Dir(), "history"),
 		Commands:    slashCmds,
+		Menu:        slashMenu,
 		Placeholder: "Ask anything, or give a task",
 		Boxed:       true,
 		OnShiftTab:  func() { cycleMode(a) },

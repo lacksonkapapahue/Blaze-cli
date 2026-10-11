@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.6.1 — Slash menu like Blaze Desktop
+
+- **Type `/` and the commands pop up above the input box**, each with a one-line description, the way Blaze Desktop's
+  composer menu works. The list filters as you type (names that start with what you typed first, then names that
+  contain it, then descriptions from three letters on). ↑ ↓ move, Enter picks (and runs commands that need nothing
+  more), Tab fills the line in, Esc closes it. The menu keeps its height while you filter so the box doesn't jump.
+- **`/skills ` opens your skill library in the same menu** and narrows to matching skills with every key. Picking a
+  skill starts a message that uses it (`Use the <name> skill: `), like Desktop. `list`, `on`, `off`, `delete` and
+  `restore` are in the menu too, and after `/skills off ` (etc.) it shows only the skills that action applies to.
+- A line recalled from history with ↑ doesn't pop the menu, so ↑ ↓ keep walking history.
+
 ## v0.6.0 — Shared SQLite memory with Blaze Desktop
 
 - **Memories now live in `~/.blaze/blaze.db`**, the SQLite database Blaze Desktop moved to in v0.5.1, instead of
