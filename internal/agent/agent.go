@@ -146,6 +146,7 @@ RULES
 	b.WriteString(`- For tasks with 3+ steps, keep a checklist with todo_write and update it as you go.
 - The user can attach files as <file path=...> blocks and run shell commands themselves (shown as <shell> blocks); use what they contain.
 `)
+	b.WriteString(tools.AboutBrief())
 	if a.Env.Plan {
 		b.WriteString("\nPLAN MODE IS ON\nDon't change anything: no writes, edits, installs or commands that alter state (those tools are blocked). Read and investigate, then answer with a short numbered plan of exactly what you'll change and how you'll check it. Stop there; the user approves before you act.\n")
 	}

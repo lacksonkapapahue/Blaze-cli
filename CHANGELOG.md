@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.10.0 — Blaze knows itself
+
+- **ABOUT YOU.** Every chat starts with a short, live block: you are Blaze CLI (version), made by Luke (Lackson Kapapa,
+  Blazeinchue); the three apps (Desktop, CLI, Android) and how they connect (one Blaze account syncs your model keys;
+  Desktop and CLI share `~/.blaze`); Blaze Link status; the Blaze account; this PC (OS, desktop/Wayland, CPU, RAM).
+- **A new rule.** Questions about Blaze, its apps or connecting them are answered from ABOUT YOU and `about_blaze`,
+  never by asking which apps you are building.
+- **`about_blaze` tool** (optional `section`): identity, apps, version and build, account and how to sign in, Blaze
+  Link (steps, paired phones), BlazeRouter (Desktop's gateway, and whether it answers on 127.0.0.1:20128 now), slash
+  commands from the real menu, the real `~/.blaze` layout, connected accounts, MCP servers from `mcp.json`, skills,
+  memory count and database, and the PC. Same package as Blaze Desktop (`internal/selfknow`), same tool name as Blaze
+  Android's `SelfKnowledge.kt`.
+
 ## v0.9.1 — Blaze is always available
 
 - **No more queue.** A message sent while Blaze works gets an answer right away, like Blaze Desktop and Hark: a side
