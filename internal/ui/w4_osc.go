@@ -5,9 +5,19 @@ package ui
 
 import (
 	"bytes"
+	"os"
 	"strconv"
 	"strings"
 )
+
+func remoteTerminal() bool {
+	for _, key := range []string{"CODESPACES", "SSH_TTY", "SSH_CONNECTION"} {
+		if _, ok := os.LookupEnv(key); ok {
+			return true
+		}
+	}
+	return os.Getenv("TERM_PROGRAM") == "vscode"
+}
 
 // parseOSC11 finds an OSC 11 reply ("ESC ] 11 ; rgb:RRRR/GGGG/BBBB" ended by BEL
 // or ESC \) in b and returns the colour as 0..1 channels, and the reply's span.

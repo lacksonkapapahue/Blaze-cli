@@ -168,8 +168,11 @@ func cmdLogin(args []string) error {
 		}
 		opts, keys = append(opts, "Create account"), append(keys, "signup")
 		i := ui.Choose("  "+ui.Ink("Sign in with")+"  ", opts, 0, -1)
-		if i < 0 || i >= len(keys) {
-			return nil
+		if i < 0 {
+			return errors.New("sign-in cancelled. Run `blaze login email` to sign in with email")
+		}
+		if i >= len(keys) {
+			return errors.New("invalid sign-in method selected")
 		}
 		method = keys[i]
 	}

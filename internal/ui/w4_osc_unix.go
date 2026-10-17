@@ -11,15 +11,14 @@ import (
 	"golang.org/x/term"
 )
 
-// queryBackground asks the terminal for its background colour (OSC 11), followed
-// by a device-attributes query (DA1) that every terminal answers, so Blaze knows
-// when the answers are complete without waiting out the timeout. It reads with
-// poll() (never a blocking read, so it cannot hang), gives up after ~100ms (a bit
-// longer once an answer has started arriving), and hands any keys typed meanwhile
-// back to the keyboard reader, so nothing is lost and no reply leaks into the
-// prompt. It only runs before the keyboard goroutine has started.
+// queryBackground asks a local terminal for its background colour (OSC 11).
+// It gives up after ~100ms (a bit longer once an answer has started arriving)
+// and hands any keys typed meanwhile back to the keyboard reader.
 func queryBackground() (light, ok bool) {
 	if !color || os.Getenv("TERM") == "dumb" || os.Getenv("BLAZE_NO_OSC11") != "" {
+		return false, false
+	}
+	if remoteTerminal() {
 		return false, false
 	}
 	if !IsTTY() || !term.IsTerminal(int(os.Stdin.Fd())) {
