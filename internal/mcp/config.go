@@ -26,6 +26,32 @@ type Server struct {
 	Headers  map[string]string `json:"headers,omitempty"`
 	Disabled bool              `json:"disabled,omitempty"`
 	Source   string            `json:"-"` // the file it came from
+	// Project is true for a server from the working folder's .mcp.json or
+	// .blaze/mcp.json; Trusted is true when that folder's files are trusted
+	// (always true for the global file). An untrusted project server never
+	// starts and its ${VAR}s are never expanded.
+	Project bool `json:"-"`
+	Trusted bool `json:"-"`
+}
+
+// MayStart is false for a project server whose folder isn't trusted.
+func (s Server) MayStart() bool { return !s.Project || s.Trusted }
+
+// ex expands ${VAR}s, except in an untrusted project server (whose file could
+// otherwise send the user's secrets to any URL or command).
+func (s Server) ex(v string) string {
+	if !s.MayStart() {
+		return v
+	}
+	return expand(v)
+}
+
+func (s Server) exMap(m map[string]string) map[string]string {
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = s.ex(v)
+	}
+	return out
 }
 
 // Remote is true for a URL server.
@@ -76,22 +102,31 @@ func samePath(a, b string) bool {
 	return x == y
 }
 
-// Load reads the global file and the project files; a project server replaces a
-// global one with the same name. Unreadable files come back as warnings.
+// Load reads the global file and the project files. Project servers are marked
+// Project (and Trusted when the folder's trust matches the files' hash); one
+// with the same name as a global server is ignored with a warning, so a repo
+// can never stand in for (and inherit the approvals of) the user's own server.
+// Unreadable files come back as warnings.
 func Load(home, dir string) ([]Server, []string) {
 	byName := map[string]Server{}
 	var warns []string
-	for _, f := range Files(home, dir) {
-		ss, err := readFile(f)
-		if err != nil {
-			if !errors.Is(err, os.ErrNotExist) {
-				warns = append(warns, fmt.Sprintf("%s: %v", f, err))
-			}
+	g := GlobalFile(home)
+	ss, err := readFile(g)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		warns = append(warns, fmt.Sprintf("%s: %v", g, err))
+	}
+	for _, s := range ss {
+		s.Trusted = true
+		byName[s.Name] = s
+	}
+	p := LoadProject(home, dir)
+	warns = append(warns, p.Warnings...)
+	for _, s := range p.Servers {
+		if gs, ok := byName[s.Name]; ok && !gs.Project {
+			warns = append(warns, fmt.Sprintf("%s: server %q ignored: %s already has a server with that name", s.Source, s.Name, g))
 			continue
 		}
-		for _, s := range ss {
-			byName[s.Name] = s
-		}
+		byName[s.Name] = s
 	}
 	out := make([]Server, 0, len(byName))
 	for _, s := range byName {
@@ -106,6 +141,10 @@ func readFile(path string) ([]Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	return parseServers(path, b)
+}
+
+func parseServers(path string, b []byte) ([]Server, error) {
 	if len(strings.TrimSpace(string(b))) == 0 {
 		return nil, nil
 	}
@@ -188,14 +227,7 @@ func (d *rawDoc) write(path string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(b, '\n'), 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return writeFileAtomic(path, append(b, '\n'), 0o600)
 }
 
 // Add writes a server into file (replacing one with the same name, keeping its

@@ -131,15 +131,27 @@ func fail(msg string) {
 // cmdLogin is `blaze login [email|google|github|--signup]`.
 func cmdLogin(args []string) error {
 	ac := getAccount()
-	if tok, _ := ac.sec.Get(sessionKey); tok != "" {
-		if u := ac.cachedUser(); u != nil {
-			ui.StepDone(true, "Already signed in as "+userLine(u), "blaze logout to switch", 0)
-			return nil
-		}
-	}
 	method := ""
 	if len(args) > 0 {
 		method = strings.TrimLeft(strings.ToLower(args[0]), "-")
+	}
+	// Blaze Cloud: `blaze login --force` (or "again") signs in afresh, and a saved
+	// session the service refuses (401) no longer blocks signing in again.
+	if method == "force" || method == "again" {
+		_ = ac.setSession(nil)
+		method = ""
+		if len(args) > 1 {
+			method = strings.TrimLeft(strings.ToLower(args[1]), "-")
+		}
+	}
+	if tok, _ := ac.sec.Get(sessionKey); tok != "" {
+		if u := ac.cachedUser(); u != nil {
+			if _, _, err := whoCheck(ac, tok); !sessionRefused(err) { // offline/5xx keep it
+				ui.StepDone(true, "Already signed in as "+userLine(u), "blaze logout to switch", 0)
+				return nil
+			}
+			_ = ac.setSession(nil) // refused (401): sign in afresh
+		}
 	}
 	prov, online := ac.providers(true)
 	if !online {
@@ -181,7 +193,7 @@ func cmdLogin(args []string) error {
 		})
 		sp.Stop()
 	default:
-		return errors.New("use: blaze login [email|google|github|--signup]")
+		return errors.New("use: blaze login [email|google|github|--signup] [--force]")
 	}
 	if err != nil {
 		return errors.New(cloud.Message(err))
@@ -192,7 +204,7 @@ func cmdLogin(args []string) error {
 	if err := ac.setSession(s); err != nil {
 		return err
 	}
-	ui.StepDone(true, "Signed in as "+userLine(&s.User), "shared with Blaze Desktop on this computer", 0)
+	ui.StepDone(true, "Signed in as "+userLine(&s.User), "Blaze Cloud is ready · no API keys needed · shared with Blaze Desktop", 0)
 	if r, err := syncKeys(20 * time.Second); err == nil {
 		reportSync(r, nil)
 	} else if !errors.Is(err, keystore.ErrUnsupported) {
@@ -242,7 +254,7 @@ func cmdWhoami() error {
 	ac := getAccount()
 	tok, _ := ac.sec.Get(sessionKey)
 	if tok == "" {
-		ui.Println("  " + ui.Sub("Not signed in. ") + ui.Accent("blaze login") + ui.Sub(" to sign in."))
+		ui.Println("  " + ui.Sub("Not signed in. ") + ui.Accent("blaze login") + ui.Sub(" to sign in (free, no API keys needed)."))
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -269,6 +281,7 @@ func cmdWhoami() error {
 	if len(u.Providers) > 0 {
 		rows = append(rows, ui.Sub("sign-ins: "+strings.Join(u.Providers, ", ")))
 	}
+	rows = append(rows, ui.Sub(cloudRouteRow()))
 	rows = append(rows, ui.Sub("service: "+ac.client.Base))
 	ui.Box(ui.AccentLabel("blaze account"), rows)
 	return nil

@@ -64,6 +64,59 @@ type Agent struct {
 	// ShowSteps prints a plain line for each finished step (BLAZE_STEPS=all);
 	// otherwise a turn shows only the working line and collapses to "Worked · N steps".
 	ShowSteps bool
+
+	// images the user attached (AskImages), kept beside the history rather than in
+	// it so saved sessions stay small
+	imgMu  sync.Mutex
+	images []imageNote
+}
+
+// imageNote is the images sent with one user message: attached to that message
+// (matched by its text) in what is sent, for its own turn and the next one.
+type imageNote struct {
+	content string
+	urls    []string
+	age     int // turns started since
+}
+
+// AskImages is Ask with images (data URLs, "data:image/png;base64,…") on the
+// user's message. The model sees them for this turn and the next; the saved
+// history keeps only the text (its "[image N]" labels).
+func (a *Agent) AskImages(ctx context.Context, prompt string, images []string) (string, error) {
+	if len(images) > 0 {
+		a.imgMu.Lock()
+		a.images = append(a.images, imageNote{content: prompt, urls: images, age: -1})
+		a.imgMu.Unlock()
+	}
+	return a.Ask(ctx, prompt)
+}
+
+// ageImages starts a turn for the image notes, dropping those two turns old.
+func (a *Agent) ageImages() {
+	a.imgMu.Lock()
+	defer a.imgMu.Unlock()
+	keep := a.images[:0]
+	for _, n := range a.images {
+		if n.age++; n.age <= 1 {
+			keep = append(keep, n)
+		}
+	}
+	a.images = keep
+}
+
+// withImages puts the noted images on their user messages in msgs (a copy of
+// the history about to be sent).
+func (a *Agent) withImages(msgs []llm.Message) {
+	a.imgMu.Lock()
+	defer a.imgMu.Unlock()
+	for _, n := range a.images {
+		for i := len(msgs) - 1; i >= 0; i-- {
+			if msgs[i].Role == "user" && msgs[i].Content == n.content {
+				msgs[i].Images = n.urls
+				break
+			}
+		}
+	}
 }
 
 // HandoffLine is said when the model handed work off without a word.
@@ -111,6 +164,13 @@ func New(cfg *config.Config, info *sysinfo.Info, cwd string, yolo bool) *Agent {
 		for i, t := range items {
 			rows[i] = ui.TodoRow{Text: t.Text, Status: t.Status}
 		}
+		done := 0
+		for _, t := range items {
+			if t.Status == "done" {
+				done++
+			}
+		}
+		ui.SetTurnProgress(done, len(items))
 		ui.Todos(rows)
 	}
 	a.Env.Status = func(s string) {
@@ -144,7 +204,7 @@ RULES
 - Stay in the folder the user started in unless they point elsewhere.
 `)
 	b.WriteString(`- For tasks with 3+ steps, keep a checklist with todo_write and update it as you go.
-- The user can attach files as <file path=...> blocks and run shell commands themselves (shown as <shell> blocks); use what they contain.
+- The user can attach files as <file path=...> blocks, @ references as <context ref="..."> blocks (files, folders, git diffs and logs, web pages) and images ([image N] in their message), and run shell commands themselves (shown as <shell> blocks); use what they contain.
 `)
 	b.WriteString(tools.AboutBrief())
 	if a.Env.Plan {
@@ -179,12 +239,17 @@ RULES
 
 // Ask runs one user turn to completion and returns the final text.
 func (a *Agent) Ask(ctx context.Context, prompt string) (_ string, err error) {
+	a.ageImages()
 	a.push(llm.Message{Role: "user", Content: prompt})
 	a.trim()
 	started := time.Now()
 	act := &ui.Activity{}
+	if !a.Quiet {
+		ui.BeginTurn()
+	}
 	a.setNow("reading your request")
 	defer func() {
+		ui.EndTurn()
 		a.setNow("")
 		a.cur = nil
 		act.Seconds = time.Since(started).Seconds()
@@ -195,7 +260,7 @@ func (a *Agent) Ask(ctx context.Context, prompt string) (_ string, err error) {
 			ui.SetActivity(act) // Ctrl+O expands the last turn that did something
 		}
 		if err != nil && len(act.Steps) > 0 {
-			ui.Worked("", len(act.Steps), time.Since(started))
+			ui.WorkedTurn("", act, time.Since(started))
 		}
 	}()
 	var final string
@@ -217,6 +282,7 @@ func (a *Agent) Ask(ctx context.Context, prompt string) (_ string, err error) {
 		}
 		all := a.toolList()
 		msgs := append([]llm.Message{{Role: "system", Content: a.system()}}, a.historyCopy()...)
+		a.withImages(msgs)
 		md := &ui.MD{}
 		if !a.Quiet {
 			a.spin.Start(steps.Thinking(step, lastPlain))
@@ -265,7 +331,7 @@ func (a *Agent) Ask(ctx context.Context, prompt string) (_ string, err error) {
 				continue
 			}
 			if !a.Quiet {
-				ui.Worked(r.Route, len(act.Steps), time.Since(started))
+				ui.WorkedTurn(r.Route, act, time.Since(started))
 			}
 			a.Reflect(ctx) // end-of-turn learning check (learn.go)
 			return final, nil
@@ -280,6 +346,7 @@ func (a *Agent) Ask(ctx context.Context, prompt string) (_ string, err error) {
 			lastPlain = plain
 			a.setNow(plain)
 			if !a.Quiet {
+				ui.SetTurnStep(len(act.Steps) + 1)
 				a.spin.Start(plain)
 			}
 			t0 := time.Now()
@@ -309,7 +376,7 @@ func (a *Agent) Ask(ctx context.Context, prompt string) (_ string, err error) {
 				}
 			}
 			if !a.Quiet {
-				ui.Worked(r.Route, len(act.Steps), time.Since(started))
+				ui.WorkedTurn(r.Route, act, time.Since(started))
 			}
 			return final, nil
 		}

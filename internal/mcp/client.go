@@ -81,11 +81,17 @@ type Client struct {
 	Info     string // "name version" from initialize
 }
 
+// ErrUntrusted is Connect's answer for a project server whose folder isn't trusted.
+var ErrUntrusted = errors.New("this folder's MCP servers aren't trusted yet: run `blaze mcp trust` here to start them")
+
 // Connect starts the server (or opens the URL) and does the initialize handshake.
 func Connect(ctx context.Context, s Server, dir, clientVersion string) (*Client, error) {
+	if !s.MayStart() {
+		return nil, ErrUntrusted
+	}
 	var tr transport
 	if s.Remote() {
-		tr = newHTTP(expand(s.URL), expandMap(s.Headers))
+		tr = newHTTP(s.ex(s.URL), s.exMap(s.Headers))
 	} else {
 		st, err := startStdio(s, dir)
 		if err != nil {
@@ -396,23 +402,23 @@ type stdio struct {
 }
 
 func startStdio(s Server, dir string) (*stdio, error) {
-	command := expand(s.Command)
+	command := s.ex(s.Command)
 	path, err := lookPath(command)
 	if err != nil {
 		return nil, fmt.Errorf("couldn't find %q on this PC: install it or give the full path", command)
 	}
 	args := make([]string, len(s.Args))
 	for i, a := range s.Args {
-		args[i] = expand(a)
+		args[i] = s.ex(a)
 	}
 	cmd := exec.Command(path, args...)
 	cmd.Dir = dir
 	if s.Cwd != "" {
-		cmd.Dir = expand(s.Cwd)
+		cmd.Dir = s.ex(s.Cwd)
 	}
 	cmd.Env = os.Environ()
 	for k, v := range s.Env {
-		cmd.Env = append(cmd.Env, k+"="+expand(v))
+		cmd.Env = append(cmd.Env, k+"="+s.ex(v))
 	}
 	detach(cmd)
 	stdin, err := cmd.StdinPipe()
@@ -696,12 +702,4 @@ func orStr(a, b string) string {
 		return a
 	}
 	return b
-}
-
-func expandMap(m map[string]string) map[string]string {
-	out := make(map[string]string, len(m))
-	for k, v := range m {
-		out[k] = expand(v)
-	}
-	return out
 }

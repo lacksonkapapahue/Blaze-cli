@@ -42,7 +42,7 @@ func (t *typeahead) dockMenu() *MenuSet {
 	if s == t.menuOff {
 		return nil
 	}
-	m := DockMenu(s)
+	m := withRecent(s, DockMenu(s), Recent())
 	if m == nil || len(m.Items) == 0 {
 		return nil
 	}
@@ -83,11 +83,13 @@ func dockLines(W int) []string {
 	if len(ta.buf) == 0 {
 		text = Weak(clip(dockPlaceholder, n-1))
 	} else {
-		text = caretWindow(ta.buf, ta.cur, n)
+		ta.fixSpans()
+		cells, ws, cur := chipCells(ta.buf, ta.pastes, ta.cur)
+		text = caretCells(cells, ws, cur, n)
 	}
 	row := glyph + text
 	out = append(out,
-		"  "+hair("┌"+strings.Repeat("─", BW-2)+"┐"),
+		"  "+boxTop(BW),
 		"  "+hair("│")+" "+row+strings.Repeat(" ", max(0, BW-4-width(row)))+" "+hair("│"),
 		"  "+hair("└"+strings.Repeat("─", BW-2)+"┘"),
 	)
@@ -95,7 +97,7 @@ func dockLines(W int) []string {
 	if q := len(ta.queue); q > 0 {
 		foot = "  " + Accent(strconv.Itoa(q)+" waiting") + Weak(" · "+dockPlural(q, "it runs", "they run")+" when this step is done · enter sends")
 	}
-	out = append(out, foot)
+	out = append(out, withGauge(foot, gauge(W), W-1))
 	for i, l := range out {
 		out[i] = clipStyled(l, W-1)
 	}
@@ -112,6 +114,16 @@ func caretWindow(buf []rune, cur, n int) string {
 	ws := make([]int, len(buf))
 	for i, r := range buf {
 		cells[i], ws[i] = dispRune(r)
+	}
+	return caretCells(cells, ws, cur, n)
+}
+
+// caretCells is caretWindow over display cells (a chip is one cell); cur is the
+// caret's cell index.
+func caretCells(cells []string, ws []int, cur, n int) string {
+	buf := cells
+	if cur < 0 || cur > len(buf) {
+		cur = len(buf)
 	}
 	// widen [lo, hi) around the caret, after it first only once the start shows
 	lo, hi, w := cur, cur, 1
@@ -139,7 +151,7 @@ func caretWindow(buf []rune, cur, n int) string {
 	if hi < len(buf) && len(after) > 0 {
 		after[len(after)-1] = "…"
 	}
-	return Ink(strings.Join(before, "")) + Accent("▏") + Ink(strings.Join(after, ""))
+	return inkJoin(before) + Accent("▏") + inkJoin(after)
 }
 
 func dockPlural(n int, one, many string) string {
@@ -193,6 +205,7 @@ func printOverLive(lines []string) {
 // k is "up", "down", "tab", "enter", "esc" or a caret key (never used here).
 // Called with ta.mu held.
 func (t *typeahead) dockKey(k string) (used, submit bool) {
+	t.fixSpans()
 	m := t.dockMenu()
 	if m == nil {
 		return false, false

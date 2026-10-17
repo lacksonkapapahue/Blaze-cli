@@ -30,6 +30,7 @@ type Editor struct {
 	OnShiftTab  func()                     // cycle modes
 	Menu        func(line string) *MenuSet // pop-up menu above the box for this line (nil = none)
 	DoubleEsc   string                     // Esc twice on an empty prompt submits this ("/rewind"); "" = off
+	RightRecord bool                       // a sent line stays in the scrollback right-aligned, like a chat bubble (UserLines)
 
 	history []string
 	loaded  bool
@@ -49,6 +50,17 @@ type Editor struct {
 	menuLine string // the line the highlight belongs to
 	menuOff  string // Esc closed the menu for exactly this line
 	lastEsc  time.Time
+
+	// big pastes shown as chips (w3_paste.go)
+	pastes     []pasteSpan
+	keepPastes []pasteSpan // the chips of keep
+	spanBuf    []rune      // the buffer the chips were last checked against
+	spanPos    int         // the caret then
+
+	// placeholder tips (w3_box.go)
+	prompts     int    // prompts opened so far
+	tipHold     bool   // the last Read ended in a wake: the next keeps its tip
+	placeholder string // the hint for this prompt
 }
 
 // StdinTTY is true when we can put the keyboard in raw mode.
@@ -134,9 +146,18 @@ func (e *Editor) Read(prompt string) (string, error) {
 	default:
 	}
 	e.buf, e.pos, e.prompt, e.curRow = nil, 0, prompt, 0
+	e.pastes = nil
 	if e.keep != nil {
 		e.buf, e.pos, e.keep = e.keep, len(e.keep), nil
+		e.pastes = e.keepPastes
 	}
+	e.keepPastes = nil
+	e.spanBuf, e.spanPos = append([]rune(nil), e.buf...), e.pos
+	if !e.tipHold {
+		e.placeholder = placeholderFor(e.Placeholder, e.prompts, Tips)
+		e.prompts++
+	}
+	e.tipHold = false
 	e.histIdx, e.draft = len(e.history), nil
 	e.menuIdx, e.menuLine, e.menuOff = 0, "", ""
 	activeEd = e
@@ -166,6 +187,9 @@ func (e *Editor) Read(prompt string) (string, error) {
 func (e *Editor) key(r rune, err error) (string, bool, error) {
 	if errors.Is(err, ErrWake) {
 		e.clear()
+		e.fixSpans()
+		e.keepPastes = e.pastes
+		e.tipHold = true
 		e.keep = append([]rune(nil), e.buf...)
 		wakeWanted = false
 		activeEd = nil
@@ -182,9 +206,10 @@ func (e *Editor) key(r rune, err error) (string, bool, error) {
 			break // filled in from the menu; Enter again (or keep typing)
 		}
 		out := string(e.buf)
-		e.render(true)
+		e.record(out)
 		Printf("\r\n")
 		e.remember(out)
+		RecordRecent(out)
 		return out, true, nil
 	case 3: // Ctrl-C
 		if len(e.buf) > 0 {
@@ -200,17 +225,25 @@ func (e *Editor) key(r rune, err error) (string, bool, error) {
 			Printf("\r\n")
 			return "", true, io.EOF
 		}
-		e.del()
+		if !e.chip("del") {
+			e.del()
+		}
 	case 127, 8:
-		e.backspace()
+		if !e.chip("backspace") {
+			e.backspace()
+		}
 	case 1:
 		e.pos = 0
 	case 5:
 		e.end()
 	case 2:
-		e.left()
+		if !e.chip("left") {
+			e.left()
+		}
 	case 6:
-		e.right()
+		if !e.chip("right") {
+			e.right()
+		}
 	case 11:
 		e.kill(e.pos, len(e.buf))
 	case 21:
@@ -219,6 +252,8 @@ func (e *Editor) key(r rune, err error) (string, bool, error) {
 		e.kill(e.wordLeft(), e.pos)
 	case 25:
 		e.insert(e.killed)
+	case 22: // Ctrl+V: a clipboard image as an [image N] chip, else its text (w3_paste.go)
+		e.clipPaste(false)
 	case 12:
 		Printf("\x1b[H\x1b[2J")
 		e.curRow = 0
@@ -256,6 +291,19 @@ func (e *Editor) key(r rune, err error) (string, bool, error) {
 }
 
 // clear wipes the drawn prompt so something can print where it was.
+// record replaces the live input with what stays in the scrollback once a line
+// is sent: the right-aligned bubble for a chat prompt, else the plain "› text".
+func (e *Editor) record(out string) {
+	if !e.RightRecord || strings.TrimSpace(out) == "" {
+		e.render(true)
+		return
+	}
+	e.clear()
+	e.fixSpans()
+	Printf("%s", strings.Join(UserLines(collapsed(e.buf, e.pastes), ""), "\r\n"))
+	e.curRow = 0
+}
+
 func (e *Editor) clear() {
 	if e.curRow > 0 {
 		Printf("\x1b[%dA", e.curRow)
@@ -508,15 +556,21 @@ func (e *Editor) csi(intro rune, seq string) {
 			e.menuOff = string(e.buf) // a recalled line doesn't pop the menu
 		}
 	case "C":
-		e.right()
+		if !e.chip("right") {
+			e.right()
+		}
 	case "D":
-		e.left()
+		if !e.chip("left") {
+			e.left()
+		}
 	case "H", "1~", "7~":
 		e.pos = 0
 	case "F", "4~", "8~":
 		e.end()
 	case "3~":
-		e.del()
+		if !e.chip("del") {
+			e.del()
+		}
 	case "1;5C", "1;3C", "5C":
 		e.pos = e.wordRight()
 	case "1;5D", "1;3D", "5D":
@@ -533,24 +587,55 @@ func (e *Editor) csi(intro rune, seq string) {
 	_ = intro
 }
 
-// paste reads a bracketed paste verbatim (newlines kept, nothing submitted).
+// paste reads a bracketed paste verbatim (newlines kept, nothing submitted). A
+// paste of more than pasteChipLines lines shows as one chip (w3_paste.go).
 func (e *Editor) paste() {
-	var b []rune
-	const endSeq = "\x1b[201~"
-	for {
-		r, _, err := In.ReadRune()
-		if err != nil {
-			break
-		}
-		b = append(b, r)
-		if len(b) >= len(endSeq) && string(b[len(b)-len(endSeq):]) == endSeq {
-			b = b[:len(b)-len(endSeq)]
-			break
-		}
+	text := readPaste()
+	if text == "" {
+		// An empty paste: Windows Terminal pastes an image-only clipboard as
+		// nothing (it binds Ctrl+V itself), so look for an image there.
+		e.clipPaste(true)
+		return
 	}
-	s := strings.ReplaceAll(strings.ReplaceAll(string(b), "\r\n", "\n"), "\r", "\n")
-	s = strings.TrimRight(s, "\n")
-	e.insert([]rune(s))
+	e.fixSpans()
+	e.buf, e.pastes = pasteInsert(e.buf, &e.pos, e.pastes, text) // a dragged-in image path becomes a chip
+	e.spanBuf, e.spanPos = append([]rune(nil), e.buf...), e.pos
+}
+
+// clipPaste reads the system clipboard into the line: an image as a chip, or
+// (unless imageOnly) its text as a paste. A hint shows above the prompt when
+// there is nothing to paste or no tool to read the clipboard.
+func (e *Editor) clipPaste(imageOnly bool) {
+	c := readClipboard(imageOnly)
+	if c.hint != "" {
+		e.clear()
+		Printf("  %s\r\n", Weak(c.hint))
+		return
+	}
+	e.fixSpans()
+	e.buf, e.pastes = c.apply(e.buf, &e.pos, e.pastes)
+	e.spanBuf, e.spanPos = append([]rune(nil), e.buf...), e.pos
+}
+
+// fixSpans brings the chips up to date with edits made since they were last
+// checked, and keeps the caret out of them.
+func (e *Editor) fixSpans() {
+	if len(e.pastes) > 0 {
+		e.pastes = syncSpans(e.spanBuf, e.buf, e.pastes, e.spanPos)
+		e.pos = outOfChip(e.pos, e.pastes)
+	}
+	e.spanBuf, e.spanPos = append(e.spanBuf[:0], e.buf...), e.pos
+}
+
+// chip applies key k to a chip next to the caret; it reports whether it acted.
+func (e *Editor) chip(k string) bool {
+	e.fixSpans()
+	nb, sp, ok := chipKey(k, e.buf, &e.pos, e.pastes)
+	if ok {
+		e.buf, e.pastes = nb, sp
+		e.spanBuf, e.spanPos = append(e.spanBuf[:0], e.buf...), e.pos
+	}
+	return ok
 }
 
 // ---------- drawing ----------
@@ -640,8 +725,20 @@ func (e *Editor) render(final bool) {
 	if n < 5 {
 		n = 5
 	}
+	e.fixSpans()
 	cells := make([]cell, 0, len(e.buf)+16)
-	for _, r := range e.buf {
+	pos := -1 // cursor index in cells (newlines take two cells while editing, a chip one)
+	for i := 0; i < len(e.buf); i++ {
+		if i == e.pos {
+			pos = len(cells)
+		}
+		if j := spanStartingAt(e.pastes, i); j >= 0 {
+			l := clip(spanLabel(e.pastes, j), n)
+			cells = append(cells, cell{Accent(l), width(l)})
+			i += e.pastes[j].n - 1
+			continue
+		}
+		r := e.buf[i]
 		if r == '\n' && !final {
 			cells = append(cells, cell{Weak("↵"), 1}, cell{"\n", 0})
 			continue
@@ -653,19 +750,17 @@ func (e *Editor) render(final bool) {
 		s, w := dispRune(r)
 		cells = append(cells, cell{s, w})
 	}
-	// cursor index in cells (newlines take two cells while editing)
-	pos := 0
-	for i := 0; i < e.pos && i < len(e.buf); i++ {
-		pos++
-		if e.buf[i] == '\n' && !final {
-			pos++
-		}
+	if pos < 0 {
+		pos = len(cells)
 	}
 	nText := len(cells)
 	if !final {
 		extra := e.ghost()
 		if extra == "" && len(e.buf) == 0 {
-			extra = e.Placeholder
+			extra = e.placeholder
+			if e.prompts == 0 {
+				extra = e.Placeholder
+			}
 		}
 		for _, r := range extra {
 			_, w := dispRune(r)
@@ -714,18 +809,21 @@ func (e *Editor) render(final bool) {
 		return b.String()
 	}
 	if boxed && !final {
-		sb.WriteString("  " + hair("┌"+strings.Repeat("─", BW-2)+"┐") + "\r\n")
+		sb.WriteString("  " + boxTop(BW) + "\r\n")
 		for i, r := range rows {
 			sb.WriteString("  " + hair("│") + " " + line(i, r) + " " + hair("│") + "\r\n")
 		}
 		sb.WriteString("  " + hair("└"+strings.Repeat("─", BW-2)+"┘"))
+		f := ""
 		if e.Footer != nil {
-			if f := e.Footer(string(e.buf)); f != "" {
-				sb.WriteString("\r\n" + clipStyled(f, W-2))
-			}
+			f = e.Footer(string(e.buf))
+		}
+		f = withGauge(f, gauge(W), W-2)
+		if f != "" {
+			sb.WriteString("\r\n" + f)
 		}
 		total := 1 + len(rows) + 1 // rows from top border to bottom border
-		if e.Footer != nil && e.Footer(string(e.buf)) != "" {
+		if f != "" {
 			total++
 		}
 		target := 1 + cr
@@ -766,6 +864,12 @@ func (e *Editor) atComplete() bool {
 		return false
 	}
 	frag := word[1:]
+	for _, k := range []string{"file:", "folder:", "image:"} { // @file:src/ma completes like @src/ma
+		if strings.HasPrefix(frag, k) {
+			frag = strings.TrimPrefix(frag[len(k):], `"`)
+			break
+		}
+	}
 	dir, base := filepath.Split(frag)
 	look := dir
 	if look == "" {
@@ -898,6 +1002,9 @@ func rawKeys(fn func(key string) bool) bool {
 // Choose shows options inline ("  ? ▸ Yes   No") and returns the picked index.
 // ← → or Tab move, Enter picks, the first letter of an option picks it, Esc picks cancel.
 func Choose(prefix string, options []string, def, cancel int) int {
+	if len(options) == 0 {
+		return cancel
+	}
 	if !StdinTTY() || !IsTTY() {
 		ans, err := ReadLine(prefix + Weak("["+strings.Join(options, "/")+"] "))
 		if err != nil {
@@ -915,6 +1022,9 @@ func Choose(prefix string, options []string, def, cancel int) int {
 		return cancel
 	}
 	sel := def
+	if sel < 0 || sel >= len(options) {
+		sel = 0
+	}
 	draw := func() {
 		var parts []string
 		for i, o := range options {
@@ -941,7 +1051,7 @@ func Choose(prefix string, options []string, def, cancel int) int {
 			return true
 		default:
 			for i, o := range options {
-				if strings.EqualFold(k, o[:1]) {
+				if o != "" && strings.EqualFold(k, o[:1]) {
 					sel = i
 					return true
 				}
@@ -951,8 +1061,18 @@ func Choose(prefix string, options []string, def, cancel int) int {
 		return false
 	})
 	// settle on the chosen answer only
-	Printf("\r\x1b[2K%s%s\r\n\x1b[?25h", prefix, Accent("■ ")+Ink(options[sel]))
+	Printf("\r\x1b[2K%s%s\r\n\x1b[?25h", prefix, chosenLabel(options, sel))
 	return sel
+}
+
+// chosenLabel is what Choose leaves on screen once it settles. A sel outside
+// options (Esc, Ctrl-C or EOF with cancel = -1) shows "cancelled" and never
+// indexes options.
+func chosenLabel(options []string, sel int) string {
+	if sel < 0 || sel >= len(options) {
+		return Weak("cancelled")
+	}
+	return Accent("■ ") + Ink(options[sel])
 }
 
 // Checklist lets the user tick rows with ↑ ↓ and Space, Enter to confirm.

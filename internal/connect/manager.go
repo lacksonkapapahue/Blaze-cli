@@ -917,6 +917,11 @@ func (m *Manager) access(ctx context.Context, id string, force bool) (string, er
 		if errors.As(err, &te) && te.Unreachable {
 			return "", fmt.Errorf("couldn't reach %s to refresh the sign-in: %s", c.Name, te.Desc)
 		}
+		if !authRefused(err) {
+			// 5xx, 429, a gateway page, a timeout or a cancel: the sign-in may be
+			// fine, so keep the connection and let a later call try again.
+			return "", fmt.Errorf("couldn't refresh the %s sign-in right now (%w). Try again in a moment", c.Name, err)
+		}
 		m.markExpired(id)
 		return "", ErrReauth
 	}
@@ -950,6 +955,10 @@ func (m *Manager) brokerRefresh(ctx context.Context, c *Connector, tok *Token) (
 		if errors.Is(err, ErrBrokerUnreachable) {
 			return "", fmt.Errorf("couldn't reach Blaze's sign-in service to refresh %s. Check your internet connection", c.Name)
 		}
+		if !authRefused(err) {
+			// rate_limited, http_5xx, a cancel or timeout: not a verdict on the sign-in.
+			return "", fmt.Errorf("couldn't refresh %s through Blaze's sign-in service right now (%w). Try again in a moment", c.Name, err)
+		}
 		m.markExpired(c.ID)
 		return "", ErrReauth
 	}
@@ -963,6 +972,48 @@ func (m *Manager) brokerRefresh(ctx context.Context, c *Connector, tok *Token) (
 		return "", err
 	}
 	return nt.AccessToken, nil
+}
+
+// refusalCodes are OAuth token-endpoint error codes that mean the refresh
+// token or the client is definitively no good. bad_refresh_token is GitHub's
+// name for invalid_grant (sent with HTTP 200).
+var refusalCodes = map[string]bool{
+	"invalid_grant":       true,
+	"invalid_client":      true,
+	"unauthorized_client": true,
+	"bad_refresh_token":   true,
+}
+
+// authRefused reports whether a refresh error is a definitive refusal of the
+// credentials, the only case that may mark a connection Expired:
+//   - a token endpoint answering HTTP 401, or HTTP 400/401 (or GitHub's 200)
+//     with invalid_grant, invalid_client or unauthorized_client;
+//   - a broker error that says so itself (AuthFailure() true: HTTP 401, or 400
+//     with one of those codes).
+//
+// Network errors, cancellation, timeouts, 429 and 5xx are transient.
+func authRefused(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrBrokerUnreachable) {
+		return false
+	}
+	var te *TokenError
+	if errors.As(err, &te) {
+		if te.Unreachable {
+			return false
+		}
+		switch {
+		case te.Status == http.StatusUnauthorized:
+			return true
+		case te.Status == http.StatusBadRequest, te.Status >= 200 && te.Status < 300:
+			return refusalCodes[te.Code]
+		}
+		return false
+	}
+	var af interface{ AuthFailure() bool }
+	if errors.As(err, &af) {
+		return af.AuthFailure()
+	}
+	return false
 }
 
 func missingScopes(need, granted []string) []string {

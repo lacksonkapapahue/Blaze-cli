@@ -2,6 +2,7 @@
 
 Blaze, the Android assistant, in your PC's terminal. One file, nothing to install first.
 It detects your PC on first run, sets itself up, and works on Windows, macOS and Linux.
+Sign in to your free Blaze account and you're done: **no API keys needed**.
 
 ## Install
 
@@ -16,26 +17,32 @@ curl -fsSL https://github.com/lacksonkapapahue/Blaze-cli/releases/latest/downloa
 ```
 
 Or download `blaze-<os>-<arch>` from the [latest release](https://github.com/lacksonkapapahue/Blaze-cli/releases/latest),
-check it against `SHA256SUMS`, and run `blaze setup`.
+check it against `SHA256SUMS`.
+
+Then run `blaze`. The first time, it asks you to sign in to Blaze (email, Google, GitHub, or create an
+account; free) and goes straight into the chat. That's all: Blaze Cloud picks a strong model for each task,
+so you never need API keys of your own.
 
 ## Use
 
 ```
-blaze                          chat in the current folder
+blaze login [email|google|github|--signup]   sign in to your Blaze account (free, no API keys)
+blaze                          chat in the current folder (asks you to sign in first if needed)
 blaze "fix the failing test"   one task, then exit (stdin is attached when piped)
-blaze setup                    detect this PC, add free models, install missing tools
-blaze doctor                   check models, shell, tools, scheduler
+blaze setup                    sign in, detect this PC, install missing tools (own keys: optional)
+blaze doctor                   check Blaze Cloud, your own models, shell, tools, scheduler
 blaze pc                       what Blaze detected about this PC
 blaze schedule list | remove NAME
 blaze update                   download the newest release and replace this binary
-blaze login [email|google|github|--signup]   sign in to your Blaze account
-blaze whoami · blaze logout    who's signed in · sign out (here and in Blaze Desktop)
+blaze login --force            sign in again (e.g. after "your Blaze sign-in has expired")
+blaze whoami · blaze logout    who's signed in and which model answers · sign out (here and in Blaze Desktop)
 blaze connect [app] [--manual] list connectors, or connect google / github / notion / slack / spotify
 blaze disconnect APP
 blaze mcp list                 MCP servers: do they start, how many tools
 blaze mcp add NAME -- CMD ARGS…           add a local (stdio) MCP server (--env K=V before --)
 blaze mcp add NAME --url URL [--header K=V]   add a remote (Streamable HTTP) MCP server
 blaze mcp remove NAME · blaze mcp enable|disable NAME
+blaze mcp trust · blaze mcp untrust   allow (or stop) this folder's .mcp.json / .blaze/mcp.json servers
 blaze skills [NAME]            skill library: list, show one, or on|off|delete|restore NAME
 blaze learn [on|off]           learn memories and skills automatically (shared with Desktop)
 ```
@@ -56,7 +63,7 @@ another word, so picking one opens the next menu. The same menus work in the box
 | `/login` | `email` · `google` · `github` · `signup` |
 | `/keys` | `list` · `sync` |
 | `/learn` | `on` · `off` |
-| `/model` | the models in your chain, then `auto` |
+| `/model` | `blaze-auto` and the per-task Blaze models, then your own chain, then `auto` |
 | `/skills` | your skills (picking one starts a message that uses it) · `list` · `on` · `off` · `delete` · `restore`, then the skills each applies to |
 | `/mcp` | `list` · `reload` · `add` · `remove` · `enable` · `disable`, then your servers' names |
 | `/agents` | `list` · `new` · `msg` · `cancel` · `resume` · `discard` · `apply` · `reject` · `cap`, then this chat's agents (specialists for apply/reject, 1-6 for cap) |
@@ -226,10 +233,26 @@ OS and version, CPU, RAM, GPU (NVIDIA, AMD, Intel, Apple), free disk, your shell
 package managers (winget, choco, scoop, brew, apt, dnf, pacman, zypper, apk) and tools (git, python, node,
 go, java, docker, cargo, gcc, ollama, gh…). It all goes into Blaze's prompt so it never asks.
 
-## Models (free)
-Same free chain as the app: Gemini, Groq, OpenRouter, Mistral, NVIDIA NIM (plus DeepSeek, Kimi, OpenAI, Claude,
-xAI, local Ollama). Keys live in the OS keychain (Credential Manager / Keychain / Secret Service); env vars
-like `GEMINI_API_KEY` also work and set Blaze up with no questions. If no key works, a keyless model answers.
+## Models: Blaze Cloud (free, no keys)
+Signed in, every model call goes through **Blaze Cloud** (the Blaze Gateway, `https://ai.blaze-app.workers.dev/v1`,
+the same one Blaze Android uses), with your Blaze session as the key. The gateway holds the provider keys and
+picks a model for each task (`agent` when Blaze uses tools, `code` for programming, `chat` otherwise), failing
+over when one is busy. The footer under each answer shows which model answered (`Blaze · groq/llama-…`).
+
+- `/model` lists `blaze-auto` (the default) and one model per task (`blaze-chat`, `blaze-quick`, `blaze-code`,
+  `blaze-vision`, `blaze-long`, `blaze-agent`); `/model blaze-code` pins one, `/model auto` goes back.
+- There's a free daily allowance. When it's used up Blaze says when it resets ("resets in 3h 12m"); when every
+  model is busy it says how many seconds to wait; an expired sign-in offers to sign you in again
+  (`blaze login --force` does the same). On the waiting list, Blaze tells you so.
+- Headless servers / CI: set `BLAZE_SESSION_TOKEN` to a session token instead of signing in on that machine.
+  `BLAZE_GATEWAY_URL` points at another gateway.
+
+### Your own keys (optional, advanced)
+Not needed, but still supported: `blaze setup` › "Add your own API keys" or `blaze keys`. Gemini, Groq,
+OpenRouter, Mistral, NVIDIA NIM (plus DeepSeek, Kimi, OpenAI, Claude, xAI, local Ollama). They are tried after
+Blaze Cloud as fallbacks; `/model provider/model` puts one first. Keys live in the OS keychain (Credential
+Manager / Keychain / Secret Service); env vars like `GEMINI_API_KEY` also work. A Blaze sign-in is always
+required; on headless servers or CI set `BLAZE_SESSION_TOKEN`.
 
 ## Tools
 `run_shell` (cwd sticks, right syntax per OS, background jobs), `job_log/job_input/job_stop`, `file_read/write/edit/list/search/delete`,

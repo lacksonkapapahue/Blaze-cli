@@ -12,11 +12,12 @@ import (
 	"unicode/utf8"
 )
 
-// Palette lifted from the Android app's Theme.kt (dark and light).
+// Palette lifted from the Android app's Theme.kt (dark and light). The accent is
+// swapped by the theme presets and the greys by high contrast (w4_theme.go).
 type palette struct{ ink, body, sub, weak, hair, accent string }
 
-var dark = palette{"240;240;238", "214;214;212", "160;160;158", "110;110;108", "70;70;74", "107;140;255"}
-var light = palette{"17;17;16", "45;45;44", "100;100;98", "150;150;148", "205;205;203", "31;75;216"}
+var dark = baseDark
+var light = baseLight
 
 var (
 	pal   = dark
@@ -29,28 +30,16 @@ func Init() {
 	if os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb" {
 		color = false
 	}
-	if t := strings.ToLower(os.Getenv("BLAZE_THEME")); t == "light" {
-		pal = light
-	} else if t == "" {
-		// COLORFGBG="0;15" means dark text on a light background.
-		if v := os.Getenv("COLORFGBG"); v != "" {
-			parts := strings.Split(v, ";")
-			if bg := parts[len(parts)-1]; bg == "15" || bg == "7" {
-				pal = light
-			}
-		}
-	}
 	if !enableVT() {
 		color = false
 	}
+	initColorDepth()
+	initTheme() // presets, light/dark (BLAZE_THEME, OSC 11, COLORFGBG), contrast (w4_theme.go)
 }
 
-func fg(rgb string) string {
-	if !color {
-		return ""
-	}
-	return "\x1b[38;2;" + rgb + "m"
-}
+// fg is the foreground escape for an "r;g;b" colour (24-bit, or the nearest of
+// 256 colours on terminals without truecolor).
+func fg(rgb string) string { return fgEsc(rgb) }
 
 func reset() string {
 	if !color {
@@ -108,7 +97,7 @@ func Printf(format string, a ...any) {
 
 func Println(s string) { Printf("%s\n", s) }
 
-var ansi = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+var ansi = regexp.MustCompile(`\x1b\[[0-9;]*m|\x1b\]8;[^\x07\x1b]*(?:\x1b\\|\x07)`)
 
 func width(s string) int { return utf8.RuneCountInString(ansi.ReplaceAllString(s, "")) }
 

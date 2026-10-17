@@ -116,9 +116,17 @@ func diffLines(a, b []string) []dline {
 
 const red = "232;110;110"
 
-// Diff shows a file change like a reviewer would: counts, then the changed
-// lines with one line of context, added in the accent and removed in red.
+// Diff shows a file change like a reviewer would: the path with +N −M, then
+// the changed lines with one line of context in a weak line-number gutter,
+// added in the accent and removed in red, with the words that changed inside
+// a paired −/+ line picked out in bold underline.
 func Diff(path, before, after string) {
+	for _, l := range diffRender(path, before, after, termWidth()) {
+		Println(l)
+	}
+}
+
+func diffRender(path, before, after string, W int) []string {
 	split := func(s string) []string {
 		if s == "" {
 			return nil
@@ -139,7 +147,8 @@ func Diff(path, before, after string) {
 	if before == "" {
 		verb = "Created"
 	}
-	Println("  " + Accent("■") + " " + Ink(verb+" "+path) + "  " + Accent(fmt.Sprintf("+%d", add)) + " " + fg(red) + fmt.Sprintf("-%d", del) + reset())
+	var out []string
+	out = append(out, "  "+Accent("■")+" "+Ink(verb+" ")+osc8(fileURL(path), Ink(path))+"  "+Accent(fmt.Sprintf("+%d", add))+" "+fg(red)+fmt.Sprintf("−%d", del)+reset())
 	keep := make([]bool, len(d))
 	for i, l := range d {
 		if l.op != ' ' {
@@ -148,7 +157,12 @@ func Diff(path, before, after string) {
 			}
 		}
 	}
-	W := termWidth()
+	marks := pairWordMarks(d)
+	// gutter wide enough for the biggest line number shown
+	nw := 3
+	for _, l := range d {
+		nw = max(nw, len(fmt.Sprint(max(l.a, l.b))))
+	}
 	shown, limit := 0, 14
 	gap := false
 	for i, l := range d {
@@ -164,30 +178,32 @@ func Diff(path, before, after string) {
 				}
 			}
 			if rest > 0 {
-				Println("    " + Weak(fmt.Sprintf("… %d more changed lines", rest)))
+				out = append(out, "    "+Weak(fmt.Sprintf("… %d more changed lines", rest)))
 			}
 			break
 		}
 		if gap && shown > 0 {
-			Println("    " + hair("┄"))
+			out = append(out, "  "+strings.Repeat(" ", nw)+hair(" ┄"))
 		}
 		gap = false
 		num := l.b
 		if l.op == '-' {
 			num = l.a
 		}
-		txt := clip(strings.ReplaceAll(l.text, "\t", "  "), W-14)
-		ln := Weak(fmt.Sprintf("%4d ", num))
+		txt := strings.ReplaceAll(l.text, "\t", "  ")
+		room := max(8, W-nw-10)
+		ln := Weak(fmt.Sprintf("%*d", nw, num)) + hair(" │ ")
 		switch l.op {
 		case '+':
-			Println("  " + ln + bgTint(pal.accent) + fg(pal.accent) + "+ " + fg(pal.ink) + txt + " " + reset())
+			out = append(out, "  "+ln+bgTint(pal.accent)+fg(pal.accent)+"+ "+fg(pal.ink)+wordMarked(txt, marks[i], room, pal.accent, pal.ink)+" "+reset())
 		case '-':
-			Println("  " + ln + bgTint(red) + fg(red) + "- " + fg(pal.sub) + txt + " " + reset())
+			out = append(out, "  "+ln+bgTint(red)+fg(red)+"- "+fg(pal.sub)+wordMarked(txt, marks[i], room, red, pal.sub)+" "+reset())
 		default:
-			Println("  " + ln + Weak("  "+txt))
+			out = append(out, "  "+ln+Weak("  "+clip(txt, room)))
 		}
 		shown++
 	}
+	return out
 }
 
 // bgTint is a faint wash of a colour over the terminal background.
@@ -199,5 +215,5 @@ func bgTint(c string) string {
 	if pal == light {
 		base = "252;252;252"
 	}
-	return "\x1b[48;2;" + mix(base, c, 0.16) + "m"
+	return bgEsc(mix(base, c, 0.16))
 }

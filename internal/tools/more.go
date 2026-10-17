@@ -218,27 +218,9 @@ func init() {
 		[]prop{p("language", "string", "python, node, shell or powershell"), p("code", "string", "The code"), p("packages", "array", "Packages to install first, e.g. [\"requests\"]"), p("timeout_s", "integer", "Default 120")},
 		[]string{"language", "code"}, func(e *Env, a args) string { return runCode(e, a) })
 
-	register("git", "Run git in the current folder (or path). Examples: status, diff, log --oneline -15, add -A, commit -m \"msg\", push, pull, clone URL, checkout -b name. Uses the user's own git credentials. Force-push, reset --hard and clean ask first.",
+	register("git", "Run git in the current folder (or path). Examples: status, diff, log --oneline -15, add -A, commit -m \"msg\", push, pull, clone URL, checkout -b name. Runs git directly, not through a shell: one git command per call, no &&, pipes or redirects. Uses the user's own git credentials. Force-push, reset --hard and clean ask first.",
 		[]prop{p("args", "string", "Everything after 'git'"), p("path", "string", "Repository folder, default current")}, []string{"args"},
-		func(e *Env, a args) string {
-			if _, err := exec.LookPath("git"); err != nil {
-				return "git isn't installed. " + installHint(e, "git")
-			}
-			cmd := "git " + a.s("args")
-			if risky(cmd) && !e.ask("Run a risky git command?", cmd) {
-				return "The user did NOT approve this git command."
-			}
-			if pth := a.s("path"); pth != "" {
-				q := expand(e, pth)
-				if e.Shell.IsPowerShell() {
-					cmd = "git -C '" + q + "' " + a.s("args")
-				} else {
-					cmd = "git -C \"" + q + "\" " + a.s("args")
-				}
-			}
-			e.status("git " + a.s("args"))
-			return e.Shell.Run(cmd, 10*time.Minute)
-		})
+		func(e *Env, a args) string { return runGit(e, a) })
 
 	register("install_tool", "Install a program (git, python, node, go, docker, ollama, or any package name) with this PC's package manager. Always asks the user first.",
 		[]prop{p("name", "string", "Tool or package name")}, []string{"name"},
@@ -283,6 +265,9 @@ func init() {
 				return sched.Remove(a.s("name"))
 			default:
 				j := sched.Job{Name: a.s("name"), When: a.s("when"), Command: a.s("command"), Prompt: a.s("prompt"), Dir: e.Shell.Cwd()}
+				if why := blocked(j.Command); why != "" {
+					return refusal(why)
+				}
 				if !e.ask("Schedule this?", j.Name+" · "+j.When+" · "+nonEmpty(j.Command, "blaze: "+j.Prompt)) {
 					return "Not scheduled."
 				}
@@ -308,6 +293,10 @@ func installHint(e *Env, tool string) string {
 func runCode(e *Env, a args) string {
 	lang := strings.ToLower(a.s("language"))
 	code := a.s("code")
+	// The snippet goes through the same blocklist and approval as run_shell.
+	if why := e.check("Run risky code?", code, risky(code), "The user did NOT approve this code. Don't run it; suggest a safer way or ask them."); why != "" {
+		return why
+	}
 	to := time.Duration(a.i("timeout_s", 120)) * time.Second
 	tmp := dataDir("tmp")
 	var pkgs []string

@@ -15,6 +15,12 @@ type MenuItem struct {
 	Desc   string // dim text after it
 	Insert string // what the line becomes when picked
 	Submit bool   // Enter on it also submits the line (Tab only fills it in)
+	// Section groups rows under a thin label (R E C E N T); "" = no label. The
+	// recent commands get it automatically (withRecent).
+	Section string
+	// DescAccent draws the description in the accent instead of the sub tone (the
+	// @ menu's reference types: @diff, @file:, @url:…).
+	DescAccent bool
 }
 
 // MenuSet is what the Menu callback returns for the current line.
@@ -22,6 +28,7 @@ type MenuSet struct {
 	Title string
 	Items []MenuItem // already filtered and ranked
 	Full  int        // size of the unfiltered set, so the menu keeps its height while filtering
+	Query string     // what the rows were filtered by, drawn in the accent ("" = the line's last word)
 }
 
 const menuRows = 8 // visible rows; the list scrolls past this
@@ -57,7 +64,7 @@ func (e *Editor) menuNow() *MenuSet {
 	if s == "" || strings.Contains(s, "\n") || s == e.menuOff {
 		return nil
 	}
-	m := e.Menu(s)
+	m := withRecent(s, e.Menu(s), Recent())
 	if m == nil || len(m.Items) == 0 {
 		return nil
 	}
@@ -129,15 +136,51 @@ func drawMenu(m *MenuSet, idx, bw int) []string {
 	}
 	inner := bw - 4 // "│ " + text + " │"
 	height := min(max(m.Full, len(m.Items)), menuRows)
-	start := 0
-	if idx >= height {
-		start = idx - height + 1
-	}
 	nameW := 0
 	for _, it := range m.Items {
 		nameW = max(nameW, width(it.Name))
 	}
 	nameW = min(nameW+3, inner/2)
+
+	// display rows: the items, with a section label where the section changes
+	// (only when the menu has more than one section)
+	type drow struct {
+		item  int    // index into m.Items, -1 for a label
+		label string // section label
+	}
+	var rows []drow
+	sections := 0
+	prev := "\x00"
+	for _, it := range m.Items {
+		if it.Section != prev {
+			if it.Section != "" {
+				sections++
+			}
+			prev = it.Section
+		}
+	}
+	prev = "\x00"
+	sel := 0
+	for i, it := range m.Items {
+		if sections > 1 && it.Section != prev && it.Section != "" {
+			rows = append(rows, drow{item: -1, label: it.Section})
+		}
+		prev = it.Section
+		if i == idx {
+			sel = len(rows)
+		}
+		rows = append(rows, drow{item: i})
+	}
+	if sections > 1 {
+		height += sections
+	}
+	start := 0
+	if sel >= height {
+		start = sel - height + 1
+	}
+	if start > 0 && rows[start-1].item == -1 && sel-start+1 < height {
+		start-- // keep the label of the first visible section in view
+	}
 
 	title := AccentLabel(m.Title)
 	var out []string
@@ -146,23 +189,30 @@ func drawMenu(m *MenuSet, idx, bw int) []string {
 		top = hair("┌" + strings.Repeat("─", bw-2) + "┐")
 	}
 	out = append(out, "  "+top)
-	for i := start; i < start+height; i++ {
+	for k := start; k < start+height; k++ {
 		row := ""
-		if i < len(m.Items) {
+		if k < len(rows) && rows[k].item < 0 {
+			row = Label(clip(rows[k].label, max(1, (inner-2)/2)))
+		} else if k < len(rows) {
+			i := rows[k].item
 			it := m.Items[i]
 			name := clip(it.Name, nameW-3)
 			pad := strings.Repeat(" ", max(1, nameW-1-width(name)))
 			desc := clip(it.Desc, max(0, inner-nameW-1))
 			if i == idx {
-				row = Accent("▸ "+name) + pad + Ink(desc)
+				row = Accent("▸ ") + highlight(name, m.Query, Accent, true) + pad + Ink(desc)
 			} else {
-				row = "  " + Body(name) + pad + Sub(desc)
+				d := Sub(desc)
+				if it.DescAccent {
+					d = Accent(desc)
+				}
+				row = "  " + highlight(name, m.Query, Body, false) + pad + d
 			}
 		}
 		out = append(out, "  "+hair("│ ")+row+strings.Repeat(" ", max(0, inner-width(row)))+hair(" │"))
 	}
 	hint := "↑↓ move · enter pick · tab fill in · esc close"
-	if len(m.Items) > height {
+	if len(rows) > height {
 		hint = fmt.Sprintf("%d/%d · ", idx+1, len(m.Items)) + hint
 	}
 	out = append(out, "  "+hair("└─ ")+Weak(hint)+" "+hair(strings.Repeat("─", max(0, bw-width(hint)-5))+"┘"))

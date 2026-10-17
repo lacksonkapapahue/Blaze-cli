@@ -34,7 +34,7 @@ func usage() {
 		ui.Accent("blaze") + ui.Sub("                          chat in the current folder"),
 		ui.Accent("blaze -c") + ui.Sub("                       continue the last chat here"),
 		ui.Accent(`blaze "fix the failing test"`) + ui.Sub("   one task, then exit"),
-		ui.Accent("blaze setup") + ui.Sub("                    detect this PC, add free models"),
+		ui.Accent("blaze setup") + ui.Sub("                    sign in, detect this PC (own keys optional)"),
 		ui.Accent("blaze doctor") + ui.Sub("                   check models, shell, tools"),
 		ui.Accent("blaze pc") + ui.Sub("                       what Blaze knows about this PC"),
 		ui.Accent("blaze schedule list|remove") + ui.Sub("     scheduled jobs"),
@@ -44,6 +44,8 @@ func usage() {
 		ui.Accent("blaze connect [app]") + ui.Sub("            connect Google, GitHub, Notion, Slack…"),
 		ui.Accent("blaze mcp list|add|remove") + ui.Sub("      MCP servers (blaze mcp help)"),
 		ui.Accent("blaze keys [sync]") + ui.Sub("              your model keys (shared with Desktop and your phone)"),
+		ui.Accent("blaze theme [name]") + ui.Sub("             accent preset: blaze · ember · mint · violet · mono"),
+		ui.Accent("blaze stats") + ui.Sub("                    your streak and the last 7 days"),
 		ui.Accent("blaze update") + ui.Sub("                   get the newest Blaze"),
 		ui.Accent("blaze version"),
 	})
@@ -58,6 +60,7 @@ func usage() {
 func main() {
 	ui.Init()
 	defer ui.ShowCursor()
+	defer ui.RestoreTitle()
 	args := os.Args[1:]
 	yolo, cont, plan := false, false, false
 	var model string
@@ -123,6 +126,12 @@ func main() {
 		in := sysinfo.Detect()
 		setup.Run(cfg, &in)
 		return
+	case "theme":
+		runTheme(rest[1:])
+		return
+	case "stats":
+		runStats()
+		return
 	case "doctor":
 		setup.DoctorExtra = mcpDoctor
 		setup.Doctor(cfg, sysinfo.Detect(), version)
@@ -165,14 +174,22 @@ func main() {
 	}
 
 	in := sysinfo.Detect()
-	if !cfg.HasAnyModel() {
+	// ---- Blaze Cloud: sign-in required to chat; no API keys (blaze_cloud.go) ----
+	if !blazeGate(len(rest) > 0) {
+		if len(rest) > 0 {
+			os.Exit(1)
+		}
+		return
+	}
+	// ---- end Blaze Cloud ----
+	if !llm.HasAnyModel(cfg) { // safety net: signed in always has the Blaze model
 		if !setup.FromEnv(cfg) {
 			if !ui.IsTTY() && len(rest) > 0 {
-				fmt.Fprintln(os.Stderr, "Blaze isn't set up yet: run `blaze setup` or set GEMINI_API_KEY.")
+				fmt.Fprintln(os.Stderr, "Blaze isn't set up yet: run `blaze login`.")
 				os.Exit(1)
 			}
 			setup.Run(cfg, &in)
-			if !cfg.HasAnyModel() {
+			if !llm.HasAnyModel(cfg) {
 				return
 			}
 		}
@@ -181,7 +198,7 @@ func main() {
 	seedSkills() // bundled skill library (skills_cmd.go)
 	a := agent.New(cfg, &in, cwd, yolo)
 	defer a.Close()
-	startMCP() // servers connect in the background; their tools join when ready
+	startMCPSession(len(rest) == 0) // servers connect in the background; chat asks before trusting a folder's project servers
 	defer stopMCP()
 	if p := loadPrefs(); !yolo && !plan {
 		a.Env.Plan = p.WorkMode == "plan"
@@ -204,7 +221,7 @@ func main() {
 		wire(a, false)
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer stop()
-		if _, err := a.Ask(ctx, prompt); err != nil {
+		if _, err := a.AskImages(ctx, expandRefs(a, prompt), takePendingImages()); err != nil {
 			ui.Println("\n  " + ui.Ink("■ ") + ui.Sub(err.Error()))
 			stopMCP()
 			os.Exit(1)
@@ -233,20 +250,25 @@ func accountCmd(cmd string, args []string) error {
 	return nil
 }
 
-var slashCmds = []string{"/agents", "/auto", "/autopilot", "/build", "/clear", "/compact", "/connect", "/disconnect", "/doctor", "/exit", "/help", "/init", "/jobs", "/keys", "/learn", "/login", "/logout", "/mcp", "/model", "/new", "/notify", "/pc", "/plan", "/quit", "/resume", "/rewind", "/schedule", "/setup", "/skills", "/undo", "/update", "/whoami", "/yolo"}
+var slashCmds = []string{"/agents", "/auto", "/autopilot", "/build", "/clear", "/compact", "/connect", "/disconnect", "/doctor", "/exit", "/help", "/init", "/jobs", "/keys", "/learn", "/login", "/logout", "/mcp", "/model", "/new", "/notify", "/pc", "/plan", "/quit", "/resume", "/rewind", "/schedule", "/setup", "/skills", "/stats", "/theme", "/undo", "/update", "/whoami", "/yolo"}
 
 // welcomeWhere is the start screen's context line (OS · shell · folder), kept so
 // /clear can draw the same start screen again.
 var welcomeWhere string
 
 func welcomeTips() string {
-	return ui.Weak("/ commands  ·  @ files  ·  ! shell  ·  # remember  ·  ⇧tab modes  ·  /agents")
+	return ui.Weak("/ commands  ·  @ context  ·  ! shell  ·  # remember  ·  ⇧tab modes  ·  /agents")
 }
 
 func repl(a *agent.Agent, bg *bgAgents, in sysinfo.Info, cont bool) {
 	welcomeWhere = in.OSName + " · " + in.Shell + " · " + shortPath(a.Env.Root)
+	ui.SetWelcomeName(welcomeName())
+	if !cont {
+		ui.WelcomeResume(agent.PeekUnfinished(a.Env.Root))
+	}
 	ui.Welcome(version, modelName(a), welcomeWhere, welcomeTips())
 	ui.FocusReporting(true)
+	ui.IdleTitle()
 	defer ui.FocusReporting(false)
 	bg.startupNotice()
 	if tag := update.Hint(version); tag != "" {
@@ -260,11 +282,12 @@ func repl(a *agent.Agent, bg *bgAgents, in sysinfo.Info, cont bool) {
 	ed := &ui.Editor{
 		HistoryFile: filepath.Join(config.Dir(), "history"),
 		Commands:    slashCmds,
-		Menu:        slashMenu,
+		Menu:        withRefsMenu(slashMenu),
 		Placeholder: "Ask anything, or give a task",
 		Boxed:       true,
 		OnShiftTab:  func() { cycleMode(a) },
 		DoubleEsc:   "/rewind",
+		RightRecord: true, // you on the right, Blaze on the left
 	}
 	ed.Glyph = func(line string) string {
 		switch {
@@ -277,7 +300,27 @@ func repl(a *agent.Agent, bg *bgAgents, in sysinfo.Info, cont bool) {
 	}
 	// the composer box under the working line looks and pops up menus like the prompt
 	ui.DockGlyph = func() string { return ed.Glyph("") }
-	ui.DockMenu = slashMenu
+	ui.DockMenu = withRefsMenu(slashMenu)
+	ui.RecentFile = filepath.Join(config.Dir(), "recent_commands")
+	ui.ModeLabel = func() string {
+		switch {
+		case a.Env.Plan:
+			return "plan"
+		case a.Autopilot():
+			return "build · autopilot"
+		}
+		return "build · auto"
+	}
+	ui.ContextUsage = func() (int, int) {
+		n := 0
+		for _, m := range a.History {
+			n += len(m.Content)
+			for _, tc := range m.ToolCalls {
+				n += len(tc.Function.Arguments)
+			}
+		}
+		return n / 4, 128000 // rough: ~4 chars per token, 128k window
+	}
 	menuAgents = func() []agents.View { return bg.m.List(bg.conv) }
 	ed.Footer = func(line string) string {
 		switch {
@@ -299,7 +342,7 @@ func repl(a *agent.Agent, bg *bgAgents, in sysinfo.Info, cont bool) {
 		if act := ui.LastActivity(); act != nil && len(act.Steps) > 0 {
 			tail = ui.Weak(" · ctrl+o steps") + tail
 		}
-		return "  " + ui.Weak("build · auto · ? /help · @ files · ! shell · # remember · shift+tab modes") + tail
+		return "  " + ui.Weak("? /help · @ context · ! shell · # remember · shift+tab modes") + tail
 	}
 
 	// Ctrl-C cancels the running turn (the prompt reads Ctrl-C itself).
@@ -344,16 +387,18 @@ func repl(a *agent.Agent, bg *bgAgents, in sysinfo.Info, cont bool) {
 			}
 		}()
 		turn := beginTurn(a, typed, prompt)
+		mark := turnBegin()
 		ctx, c := context.WithCancel(context.Background())
 		mu.Lock()
 		cancel = c
 		mu.Unlock()
 		restore := ui.Quiet()
 		ui.StartTypeahead() // the composer stays open: Blaze answers while it works (lane.go)
-		_, err := a.Ask(ctx, prompt)
+		_, err := a.AskImages(ctx, prompt, takePendingImages())
 		ed.Keep(ui.StopTypeahead())
 		restore()
 		endTurn(a, turn)
+		turnFinish(a, turn, mark, err == nil)
 		mu.Lock()
 		cancel = nil
 		mu.Unlock()
@@ -364,6 +409,7 @@ func repl(a *agent.Agent, bg *bgAgents, in sysinfo.Info, cont bool) {
 				ui.Println("\n  " + ui.Weak("Stopped."))
 			} else {
 				ui.Println("\n  " + ui.Ink("■ ") + ui.Sub(err.Error()))
+				blazeAfterError(err) // ---- Blaze Cloud: expired sign-in → sign in again ----
 			}
 			return
 		}
@@ -414,7 +460,10 @@ func repl(a *agent.Agent, bg *bgAgents, in sysinfo.Info, cont bool) {
 		}
 		if q, ok := ui.NextQueued(); ok {
 			line = q
-			ui.Println("\n" + ui.Accent("›") + " " + ui.Ink(q) + ui.Weak("  · sent while Blaze worked"))
+			ui.Println("")
+			for _, l := range ui.UserLines(q, "sent while Blaze worked") {
+				ui.Println(l)
+			}
 		} else if bg.pending() {
 			wake()
 			continue
@@ -473,7 +522,7 @@ func repl(a *agent.Agent, bg *bgAgents, in sysinfo.Info, cont bool) {
 			continue
 		}
 		typedNext = line
-		run(attachFiles(a, line))
+		run(expandRefs(a, line))
 	}
 }
 
@@ -582,13 +631,13 @@ func help() {
 		ui.Accent("/login") + ui.Sub("     Blaze account   ") + ui.Accent("/whoami") + ui.Sub("   ") + ui.Accent("/logout") + ui.Sub("   ") + ui.Accent("/connect") + ui.Sub(" [app]   ") + ui.Accent("/keys") + ui.Sub(" [sync]"),
 		ui.Accent("/mcp") + ui.Sub("       MCP servers: status · reload · add · remove · enable|disable NAME"),
 		ui.Accent("/model") + ui.Sub("     pick the model Blaze uses (saved)"),
+		ui.Accent("/theme") + ui.Sub("     accent preset (saved)   ") + ui.Accent("/stats") + ui.Sub(" streak and last 7 days"),
 		ui.Accent("/skills") + ui.Sub("    skill library: list · <name> · on|off|delete|restore <name>   ") + ui.Accent("/learn") + ui.Sub(" [on|off]"),
 		ui.Accent("/jobs") + ui.Sub("      background jobs   ") + ui.Accent("/schedule") + ui.Sub(" scheduled jobs"),
 		ui.Accent("/pc") + ui.Sub("        this PC   ") + ui.Accent("/doctor") + ui.Sub(" check everything   ") + ui.Accent("/setup"),
 		ui.Accent("/update") + ui.Sub("    get the newest Blaze   ") + ui.Accent("/exit"),
 	})
-	ui.Box(ui.AccentLabel("keys"), []string{
-		ui.Ink("@path") + ui.Sub("         attach a file or folder (tab completes)"),
+	ui.Box(ui.AccentLabel("keys"), append(refsHelpLines(), []string{
 		ui.Ink("!command") + ui.Sub("      run it yourself; Blaze sees the output"),
 		ui.Ink("#note") + ui.Sub("         remember this for next time"),
 		ui.Ink("shift+tab") + ui.Sub("     cycle: build·auto → build·autopilot → plan"),
@@ -598,7 +647,7 @@ func help() {
 		ui.Ink("esc esc") + ui.Sub("       on an empty line: /rewind (pick a message to go back to)"),
 		ui.Ink("ctrl+o") + ui.Sub("        show / hide the last answer's steps (commands, output, diffs)"),
 		ui.Ink("typing") + ui.Sub("        works while Blaze is busy: it answers right away, steers the work or stops it"),
-	})
+	}...))
 }
 
 // confirmQuit asks before quitting while background agents run (they'd stop and
@@ -627,6 +676,7 @@ func slash(a *agent.Agent, bg *bgAgents, line string, run func(string)) bool {
 		// Start over on a clean terminal: screen and scrollback wiped, the start
 		// screen drawn again, so nothing of the old chat (or menus) is left behind.
 		if ui.IsTTY() && welcomeWhere != "" {
+			ui.WelcomeResume("")
 			ui.Redraw(version, modelName(a), welcomeWhere, welcomeTips())
 		} else {
 			ui.Step("New conversation.")
@@ -669,6 +719,10 @@ func slash(a *agent.Agent, bg *bgAgents, line string, run func(string)) bool {
 		if err := accountCmd(strings.TrimPrefix(f[0], "/"), f[1:]); err != nil {
 			fail(err.Error())
 		}
+	case "/theme":
+		runTheme(f[1:])
+	case "/stats":
+		runStats()
 	case "/notify":
 		msg := strings.TrimSpace(strings.TrimPrefix(line, f[0]))
 		if msg == "" {

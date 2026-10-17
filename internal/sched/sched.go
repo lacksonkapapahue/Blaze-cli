@@ -71,6 +71,9 @@ var days = map[string][2]string{"mon": {"1", "MON"}, "tue": {"2", "TUE"}, "wed":
 // parse turns "daily 07:00" etc. into a cron line and schtasks arguments.
 func parse(when string) (cron string, win []string, err error) {
 	w := strings.ToLower(strings.TrimSpace(when))
+	if strings.ContainsFunc(w, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		return "", nil, fmt.Errorf("the schedule %q has control characters in it", when)
+	}
 	hm := func(s string) (int, int, error) {
 		parts := strings.Split(s, ":")
 		h, err := strconv.Atoi(parts[0])
@@ -146,12 +149,15 @@ func Add(j Job) string {
 			return "Error: Task Scheduler refused: " + strings.TrimSpace(string(out))
 		}
 	} else {
-		if _, err := exec.LookPath("crontab"); err != nil {
+		if !haveCrontab() {
 			return "Error: crontab isn't installed. Install cron (e.g. sudo apt install cron) and try again."
 		}
-		lines := cronLines(j.Name)
-		lines = append(lines, fmt.Sprintf("%s %s # blaze:%s", cron, run, j.Name))
-		if err := writeCron(lines); err != nil {
+		cur, err := readCrontab()
+		if err != nil {
+			return "Error: " + err.Error() + " Your crontab was left as it was."
+		}
+		next, _ := mergeCron(cur, j.Name, fmt.Sprintf("%s %s # blaze:%s", cron, run, j.Name))
+		if err := writeCron(cur, next); err != nil {
 			return "Error: " + err.Error()
 		}
 	}
@@ -167,22 +173,78 @@ func Add(j Job) string {
 	return fmt.Sprintf("Scheduled %q (%s). Logs: %s", j.Name, j.When, filepath.Join(config.Dir(), "logs", j.Name+".log"))
 }
 
-// cronLines returns the current crontab without the named blaze entry.
-func cronLines(drop string) []string {
-	out, _ := exec.Command("crontab", "-l").Output()
+var haveCrontab = func() bool { _, err := exec.LookPath("crontab"); return err == nil }
+
+// readCrontab returns the user's current crontab. "No crontab for this user"
+// is an empty crontab, not an error. Any other failure is returned so the
+// caller can stop before writing: writing after a failed read would replace
+// every entry the user had with Blaze's lines alone.
+var readCrontab = func() (string, error) {
+	c := exec.Command("crontab", "-l")
+	var stderr strings.Builder
+	c.Stderr = &stderr
+	out, err := c.Output()
+	if err == nil {
+		return string(out), nil
+	}
+	if _, ok := err.(*exec.ExitError); ok && noCrontab(stderr.String()) {
+		return "", nil
+	}
+	msg := strings.TrimSpace(stderr.String())
+	if msg == "" {
+		msg = err.Error()
+	}
+	return "", fmt.Errorf("couldn't read your crontab (%s).", msg)
+}
+
+// noCrontab reports whether crontab -l's stderr means the user simply has no
+// crontab yet (cronie/vixie/macOS: "no crontab for <user>"; busybox: "can't
+// open '<user>': No such file or directory").
+func noCrontab(stderr string) bool {
+	l := strings.ToLower(stderr)
+	return strings.Contains(l, "no crontab") ||
+		(strings.Contains(l, "can't open") && strings.Contains(l, "no such file"))
+}
+
+// mergeCron returns cur with the named Blaze entry removed and add (if not
+// empty) appended. Every other line, including comments, environment settings
+// and blank lines between entries, is kept as it was; only trailing blank
+// lines are trimmed. changed reports whether the result differs from cur.
+func mergeCron(cur, drop, add string) (next string, changed bool) {
+	cur = strings.ReplaceAll(cur, "\r\n", "\n")
 	var keep []string
-	for _, l := range strings.Split(string(out), "\n") {
-		if strings.TrimSpace(l) == "" || strings.HasSuffix(l, "# blaze:"+drop) {
+	tag := "# blaze:" + drop
+	for _, l := range strings.Split(cur, "\n") {
+		if drop != "" && strings.HasSuffix(strings.TrimRight(l, " \t"), tag) {
+			changed = true
 			continue
 		}
 		keep = append(keep, l)
 	}
-	return keep
+	for len(keep) > 0 && strings.TrimSpace(keep[len(keep)-1]) == "" {
+		keep = keep[:len(keep)-1]
+	}
+	if add != "" {
+		keep = append(keep, add)
+		changed = true
+	}
+	if len(keep) == 0 {
+		return "", changed
+	}
+	return strings.Join(keep, "\n") + "\n", changed
 }
 
-func writeCron(lines []string) error {
+// writeCron installs next as the user's crontab, saving the previous one to
+// ~/.blaze/crontab.bak first.
+var writeCron = func(prev, next string) error {
+	if strings.TrimSpace(prev) != "" {
+		_ = os.MkdirAll(config.Dir(), 0o700)
+		if err := os.WriteFile(filepath.Join(config.Dir(), "crontab.bak"), []byte(prev), 0o600); err != nil {
+			return fmt.Errorf("couldn't back up your crontab before changing it: %v", err)
+		}
+	}
 	c := exec.Command("crontab", "-")
-	c.Stdin = strings.NewReader(strings.Join(lines, "\n") + "\n")
+	c.Stdin = strings.NewReader(next)
 	if out, err := c.CombinedOutput(); err != nil {
 		return fmt.Errorf("crontab: %s", strings.TrimSpace(string(out)))
 	}
@@ -192,8 +254,16 @@ func writeCron(lines []string) error {
 func Remove(name string) string {
 	if runtime.GOOS == "windows" {
 		_ = exec.Command("schtasks", "/Delete", "/F", "/TN", `Blaze\`+name).Run()
-	} else if _, err := exec.LookPath("crontab"); err == nil {
-		_ = writeCron(cronLines(name))
+	} else if haveCrontab() {
+		cur, err := readCrontab()
+		if err != nil {
+			return "Error: " + err.Error() + " Your crontab was left as it was, and " + name + " is still scheduled."
+		}
+		if next, changed := mergeCron(cur, name, ""); changed {
+			if err := writeCron(cur, next); err != nil {
+				return "Error: " + err.Error()
+			}
+		}
 	}
 	js := Load()
 	var keep []Job

@@ -6,7 +6,9 @@ import (
 )
 
 // MD renders streamed Markdown line by line in Blaze's style: headings in the
-// accent, bullets as hairline dots, numbered lists as 01/02, code in a ruled block.
+// accent, bullets as hairline dots, numbered lists as 01/02, code in a ruled,
+// highlighted block, tables as hairline grids and callouts as accent-ruled
+// blocks. Table rows are held until the table ends (or Flush).
 type MD struct {
 	buf    strings.Builder
 	inCode bool
@@ -16,9 +18,23 @@ type MD struct {
 	Pre, Post func()
 	// Out, when set, takes each rendered line instead of printing it.
 	Out func(string)
+
+	lang    *langSpec // the open code block's language
+	hl      hlState
+	table   []string // buffered | rows |
+	call    string   // open callout kind
+	callQ   bool     // the open callout is the "> [!KIND]" form
+	batch   bool     // inside Write/Flush: Pre runs before the first emit
+	printed bool
 }
 
 func (m *MD) emit(s string) {
+	if m.batch && !m.printed {
+		m.printed = true
+		if m.Pre != nil {
+			m.Pre()
+		}
+	}
 	if m.Out != nil {
 		m.Out(s)
 		return
@@ -42,23 +58,91 @@ var (
 	reBold = regexp.MustCompile(`\*\*([^*]+)\*\*`)
 	reCode = regexp.MustCompile("`([^`]+)`")
 	reNum  = regexp.MustCompile(`^(\s*)(\d+)[.)]\s+(.*)$`)
-	reLink = regexp.MustCompile(`\[([^\]]+)\]\((https?://[^)]+)\)`)
+	reLink = regexp.MustCompile(`\[([^\]]+)\]\((https?://[^)\s]+)\)`)
+	reSpan = regexp.MustCompile("`[^`]+`|\\[([^\\]]+)\\]\\((https?://[^)\\s]+)\\)")
 )
 
-func inline(s string) string {
-	s = reLink.ReplaceAllString(s, "$1 "+"\x00$2\x01")
-	s = reCode.ReplaceAllStringFunc(s, func(m string) string { return Accent(m[1:len(m)-1]) + fg(pal.body) })
-	s = reBold.ReplaceAllStringFunc(s, func(m string) string { return Bold(m[2:len(m)-2]) + fg(pal.body) })
-	s = strings.ReplaceAll(strings.ReplaceAll(s, "\x00", fg(pal.weak)+"("), "\x01", ")"+fg(pal.body))
-	return fg(pal.body) + s + reset()
+func inline(s string) string { return inlineIn(s, pal.body) }
+
+// inlineIn renders inline markdown (code, bold, links, bare URLs and
+// file:line paths) over a base colour.
+func inlineIn(s, base string) string {
+	b := fg(base)
+	same := func(t string) string { return t }
+	var out strings.Builder
+	out.WriteString(b)
+	text := func(t string) {
+		at := 0
+		for _, ix := range reBold.FindAllStringSubmatchIndex(t, -1) {
+			out.WriteString(linkify(t[at:ix[0]], same, ulText))
+			out.WriteString(bold() + fg(pal.ink) + linkify(t[ix[2]:ix[3]], same, ulText) + reset() + b)
+			at = ix[1]
+		}
+		out.WriteString(linkify(t[at:], same, ulText))
+	}
+	at := 0
+	for _, ix := range reSpan.FindAllStringSubmatchIndex(s, -1) {
+		text(s[at:ix[0]])
+		at = ix[1]
+		if ix[2] < 0 { // `code`
+			out.WriteString(fg(pal.accent) + linkify(s[ix[0]+1:ix[1]-1], same, ulText) + b)
+			continue
+		}
+		label, url := s[ix[2]:ix[3]], s[ix[4]:ix[5]]
+		if linksOn() {
+			out.WriteString(osc8(url, fg(pal.accent)+ulText(label)) + b)
+		} else {
+			out.WriteString(label + " " + fg(pal.weak) + "(" + url + ")" + b)
+		}
+	}
+	text(s[at:])
+	out.WriteString(reset())
+	return out.String()
+}
+
+func (m *MD) flushTable() {
+	if len(m.table) == 0 {
+		return
+	}
+	rows := m.table
+	m.table = nil
+	for _, l := range renderTable(rows, termWidth()-1) {
+		m.emit(l)
+	}
 }
 
 func (m *MD) line(l string) {
 	t := strings.TrimSpace(l)
+	if !m.inCode {
+		if len(m.table) > 0 {
+			if isTableRow(t) {
+				m.table = append(m.table, t)
+				return
+			}
+			m.flushTable()
+		}
+		if m.call != "" {
+			switch {
+			case m.callQ && strings.HasPrefix(t, ">"):
+				if body := strings.TrimSpace(t[1:]); body != "" {
+					m.emit(calloutRule() + inline(body))
+				} else {
+					m.emit("  " + Accent("│"))
+				}
+				return
+			case !m.callQ && t != "" && !blockStart(t):
+				m.emit(calloutRule() + inline(t))
+				return
+			}
+			m.call = ""
+		}
+	}
 	if strings.HasPrefix(t, "```") {
 		if !m.inCode {
 			lang := strings.TrimPrefix(t, "```")
-			m.emit("  " + hair("┌─ ") + Label(nonEmpty(lang, "code")))
+			m.lang, m.hl = specFor(lang), hlState{}
+			lab := strings.Fields(lang)
+			m.emit("  " + hair("┌─ ") + Label(nonEmpty(strings.Join(lab[:min(1, len(lab))], ""), "code")))
 		} else {
 			m.emit("  " + hair("└─"))
 		}
@@ -66,18 +150,32 @@ func (m *MD) line(l string) {
 		return
 	}
 	if m.inCode {
-		m.emit("  " + hair("│ ") + Ink(l))
+		code := strings.ReplaceAll(l, "\t", "    ")
+		m.emit("  " + hair("│ ") + codeHL(m.lang, &m.hl, code))
+		return
+	}
+	if kind, rest, q, ok := calloutStart(t); ok {
+		m.call, m.callQ = kind, q
+		m.emit(calloutHead(kind))
+		if rest != "" {
+			m.emit(calloutRule() + inline(rest))
+		}
 		return
 	}
 	switch {
 	case t == "":
 		m.emit("")
-	case strings.HasPrefix(t, "#"):
-		h := strings.TrimSpace(strings.TrimLeft(t, "#"))
-		m.emit("  " + Accent("■ ") + Bold(h))
+	case isTableRow(t):
+		m.table = append(m.table, t)
+	case reHeading.MatchString(t):
+		g := reHeading.FindStringSubmatch(t)
+		for _, s := range mdHeading(len(g[1]), g[2]) {
+			m.emit(s)
+		}
 	case strings.HasPrefix(t, "- ") || strings.HasPrefix(t, "* ") || strings.HasPrefix(t, "• "):
 		indent := strings.Repeat("  ", (len(l)-len(strings.TrimLeft(l, " ")))/2)
-		m.emit("  " + indent + Weak("·") + " " + inline(t[2:]))
+		_, after, _ := strings.Cut(t, " ")
+		m.emit("  " + indent + Weak("·") + " " + inline(after))
 	case reNum.MatchString(l):
 		g := reNum.FindStringSubmatch(l)
 		n := g[2]
@@ -85,10 +183,11 @@ func (m *MD) line(l string) {
 			n = "0" + n
 		}
 		m.emit("  " + g[1] + Weak(n) + "  " + inline(g[3]))
-	case strings.HasPrefix(t, "> "):
-		m.emit("  " + Accent("│ ") + Sub(t[2:]))
+	case t == ">" || strings.HasPrefix(t, "> "):
+		// a plain quote gets a hairline rule; the accent rule is for callouts
+		m.emit("  " + hair("│ ") + inlineIn(strings.TrimSpace(t[1:]), pal.sub))
 	case t == "---" || t == "***":
-		m.emit("  " + hair(strings.Repeat("─", 48)))
+		m.emit("  " + hair(strings.Repeat("─", min(48, termWidth()-4))))
 	default:
 		m.emit("  " + inline(l))
 	}
@@ -98,9 +197,10 @@ func (m *MD) line(l string) {
 func (m *MD) Write(s string) {
 	m.any = true
 	m.buf.WriteString(s)
-	printed := false
+	m.batch, m.printed = true, false
 	defer func() {
-		if printed && m.Post != nil {
+		m.batch = false
+		if m.printed && m.Post != nil {
 			m.Post()
 		}
 	}()
@@ -110,25 +210,23 @@ func (m *MD) Write(s string) {
 		if i < 0 {
 			return
 		}
-		if !printed && m.Pre != nil {
-			m.Pre()
-		}
-		printed = true
 		m.line(strings.TrimRight(b[:i], "\r"))
 		m.buf.Reset()
 		m.buf.WriteString(b[i+1:])
 	}
 }
 
-// Flush renders whatever is left (the last line has no newline).
+// Flush renders whatever is left (the last line has no newline), any held
+// table rows, and closes an open code block.
 func (m *MD) Flush() {
-	if m.Pre != nil && (m.buf.Len() > 0 || m.inCode) {
-		m.Pre()
-	}
+	m.batch, m.printed = true, false
+	defer func() { m.batch = false }()
 	if rest := m.buf.String(); rest != "" {
 		m.line(rest)
 		m.buf.Reset()
 	}
+	m.flushTable()
+	m.call = ""
 	if m.inCode {
 		m.emit("  " + hair("└─"))
 		m.inCode = false

@@ -37,6 +37,13 @@ const Rule = `- Questions about Blaze itself, its apps (Blaze Desktop, Blaze CLI
 // Worker is the Blaze account service (blaze-auth, cloud/ in the Blaze-dekstop repo).
 const Worker = "https://blaze-auth.blaze-app.workers.dev"
 
+// Gateway is the Blaze Gateway (Blaze Cloud): one OpenAI-compatible endpoint signed in
+// with the Blaze account; it holds the provider keys and picks the model per task.
+const Gateway = "https://ai.blaze-app.workers.dev/v1"
+
+// modelsLine is how Blaze gets its models (Blaze Android v0.25.0+, Blaze CLI).
+const modelsLine = "Models come with the account: Blaze Cloud (the Blaze Gateway) picks a strong model for each task, so nobody needs API keys; keys of your own are an optional extra."
+
 // Entry is one named thing with a short description (a view, a command, a preset).
 type Entry struct {
 	Name string `json:"name"`
@@ -239,7 +246,7 @@ func Brief(f Facts) string {
 	var b strings.Builder
 	b.WriteString("\nABOUT YOU\n")
 	fmt.Fprintf(&b, "- You are Blaze, running here as %s %s. Blaze is made by Luke (Lackson Kapapa, Blazeinchue). Three apps: Blaze Desktop (Windows/macOS/Linux), Blaze CLI (terminal) and Blaze Android (phone).\n", f.App, nz(f.Version, "dev"))
-	b.WriteString("- How they connect: sign in to the same Blaze account in each app and your model keys follow you (encrypted sync). Desktop and CLI on one computer share " + nz(f.DataDir, "~/.blaze") + " (keys, skills, memory, MCP).\n")
+	b.WriteString("- How they connect: sign in to the same Blaze account in each app. " + modelsLine + " Desktop and CLI on one computer share " + nz(f.DataDir, "~/.blaze") + " (keys, skills, memory, MCP).\n")
 	b.WriteString("- Phone ↔ PC (Blaze Link): " + linkLine(f) + "\n")
 	if f.Router.Present {
 		fmt.Fprintf(&b, "- BlazeRouter: %s, %s (dashboard /dashboard).\n", onOff(f.Router.Running, "on", "off"), nz(f.Router.URL, "http://127.0.0.1:20128"))
@@ -346,14 +353,14 @@ func one(f Facts, s string) string {
 		li("Made by Luke (Lackson Kapapa) of Blazeinchue, a computer science student at Northrise University.")
 		li("This app: %s %s.", f.App, nz(f.Version, "dev"))
 		if f.Model != "" {
-			li("Current model: %s (through Blaze's model router; it may fall back when one is busy).", f.Model)
+			li("Current model: %s (Blaze Cloud picks per task when signed in; it may fall back when one is busy).", f.Model)
 		}
 	case "apps":
 		h("Apps and how they connect")
 		li("Blaze Desktop: Windows, macOS, Linux app (Go + Wails). github.com/lacksonkapapahue/Blaze-dekstop")
 		li("Blaze CLI: the same Blaze in a terminal (`blaze`). github.com/lacksonkapapahue/Blaze-cli")
 		li("Blaze Android: the phone app. github.com/lacksonkapapahue/Blaze-agent")
-		li("Blaze account (all three): sign in with the same account in each app. Model keys sync, encrypted, through %s. The account service also keeps custom skills for Blaze Android.", nz(f.Account.Service, Worker))
+		li("Blaze account (all three): sign in with the same account in each app. %s Own model keys, if any, sync encrypted through %s. The account service also keeps custom skills for Blaze Android.", modelsLine, nz(f.Account.Service, Worker))
 		li("Desktop + CLI on one computer: they share %s (model keys, skills, memory in blaze.db, MCP servers), so what you set up in one works in the other at once.", nz(f.DataDir, "~/.blaze"))
 		li("Phone + PC directly (Blaze Link): see LINK below.")
 		if f.PhonePrev {
@@ -373,7 +380,7 @@ func one(f Facts, s string) string {
 		if !f.Account.KeysSync.IsZero() {
 			li("Model keys last synced: %s", f.Account.KeysSync.Format("2 Jan 2006 15:04"))
 		}
-		li("What it shares: your model keys (encrypted) across Desktop, CLI and Android; it is also your sign-in for one-click connectors. Chats, memory and connector tokens stay on this computer.")
+		li("What it gives: Blaze Cloud models (no API keys needed; the gateway at %s picks a model per task, with a free daily allowance), your own model keys if you added any (encrypted sync across Desktop, CLI and Android), and the sign-in for one-click connectors. Chats, memory and connector tokens stay on this computer.", Gateway)
 		if f.Account.SignIn != "" {
 			li("Sign in: %s", f.Account.SignIn)
 		}
@@ -385,7 +392,7 @@ func one(f Facts, s string) string {
 			li("Pair, step by step: 1) Open Blaze Desktop › Phone and press Show pairing QR code. 2) On the phone open Blaze › Settings › Blaze Desktop and scan it. 3) Keep both on the same Wi-Fi (or Tailscale). 4) The phone shows the PC as connected; unpair any time from the Phone view.")
 		} else {
 			li("Status in this build: the PC side is NOT in this %s %s build (it was built in Blaze-dekstop PR #3, not merged yet), so a phone can't pair with this PC today. The phone side is shipped in Blaze Android (Settings › Blaze Desktop).", f.App, nz(f.Version, "dev"))
-			li("What works now between phone and PC: sign in to the same Blaze account on both so your model keys follow you, and use Design › Phone to preview designs on the phone.")
+			li("What works now between phone and PC: sign in to the same Blaze account on both (Blaze Cloud answers on both, no keys needed), and use Design › Phone to preview designs on the phone.")
 		}
 		if len(f.Link.Devices) == 0 {
 			li("Paired phones: none.")

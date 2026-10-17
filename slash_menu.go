@@ -53,6 +53,8 @@ var slashMenuCmds = []slashCmd{
 	{"/mcp", "MCP servers: status · reload · add · remove · enable|disable", true},
 	{"/keys", "Your model keys (shared with Desktop and your phone): sync", true},
 	{"/notify", "Desktop notifications when a task finishes", false},
+	{"/theme", "Accent colour: blaze · ember · mint · violet · mono", true},
+	{"/stats", "Your streak, this week's tasks and time worked", false},
 	{"/pc", "What Blaze detected about this PC", false},
 	{"/doctor", "Check models, shell, tools and scheduler", false},
 	{"/setup", "Detect this PC, add free models, install tools", false},
@@ -184,6 +186,11 @@ func argMenu(cmd, rest string) *ui.MenuSet {
 			{"on", "Save memories and skills as you go", false, ""},
 			{"off", "Only save when you ask", false, ""},
 		})
+	case "/theme":
+		if spaced {
+			return nil
+		}
+		return themeMenu(rest)
 	case "/update":
 		if spaced {
 			return nil

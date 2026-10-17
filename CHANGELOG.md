@@ -1,5 +1,70 @@
 # Changelog
 
+## v0.12.0 — Blaze Cloud sign-in, a new look, @ context and image paste
+
+- **Sign in, no API keys.** Blaze now needs a free Blaze account and nothing else. Signed out, `blaze` shows a
+  "Sign in to Blaze to start · free, no API keys" card and runs the login (email, Google, GitHub or a new account)
+  inline; non-interactive runs exit with "run `blaze login`". Every model call goes through the Blaze Gateway
+  (`https://ai.blaze-app.workers.dev/v1`, `BLAZE_GATEWAY_URL` to override) with your session token, read fresh each
+  request, on `blaze-auto` with a `blaze_task` hint (`agent`, `code`, `long`, `chat`); `/model` lists the per-task
+  `blaze-*` models. Clear messages for an expired sign-in (offers to sign in again), a used-up daily allowance
+  ("resets in 3h 12m"), busy models, the waiting list and rejected accounts; network or 5xx errors never sign you out.
+  Your own keys still work as optional fallbacks after Blaze. `BLAZE_SESSION_TOKEN` for servers and CI. `blaze login`
+  re-checks a dead session; `--force` always signs in again. `blaze setup`, `doctor` and `whoami` lead with Blaze.
+- **Turn moments.** The working line knows its phase (thinking, reading, searching, editing, running) with its own
+  shimmer, plus the step count, elapsed time and a ■■■□□ 3/5 rail from the to-do list. The finish line adds chips like
+  `+12 −3 · 4 files · tests ✓` with a short accent sweep. Back-to-back steps are joined by a hairline `│` timeline. The
+  start screen greets by time of day and offers to pick up an unfinished conversation; quitting prints a session recap.
+- **Better reading.** Palette-only syntax highlighting (Go, Python, JS/TS, shell, JSON, Rust, C-like), hairline
+  Markdown tables, Note/Tip/Warning callouts, diffs with line numbers, `+N −M` headers and word-level marks, a clearer
+  heading hierarchy, and clickable links and `file:line` paths (OSC 8; `BLAZE_NO_LINKS=1` for plain).
+- **Composer.** Slash and @ menus light up matched letters and put recent commands first; a `ctx ━━━─── 41%` gauge
+  (rough estimate) suggests `/compact` near full; the box border shows the mode (`B U I L D · A U T O`); rotating
+  tips; big pastes fold into a `[pasted 42 lines]` chip.
+- **@ context references.** `@diff`, `@staged`, `@file:`, `@folder:`, `@git:5`, `@url:` and `@image:` (plus plain
+  `@path`) expand into labelled context blocks with size caps, and a receipt like `■ @diff 214 lines` shows what went
+  with the message. Git runs directly with pagers and external tools off; URLs are http(s) only, capped and timed out.
+- **Images.** Ctrl+V attaches a clipboard image as an `[image 1]` chip (text otherwise); Ctrl+Shift+V stays plain
+  text paste. Pasted or dragged image paths attach too. Images are resized in pure Go, capped at 4 MB and 4 per
+  message, sent as OpenAI content parts, and never written into saved sessions. Vision models only.
+- **Themes.** `/theme` or `blaze theme`: blaze, ember, mint, violet, mono (all ≥ 4.5:1 contrast). Light/dark follows
+  the terminal (OSC 11, `BLAZE_THEME` to force), `BLAZE_CONTRAST=high`, a 256-colour fallback, tab titles and taskbar
+  progress (Windows Terminal, ghostty, ConEmu), a bell and desktop notification when a long task finishes while you're
+  in another window, and `/stats` with a day streak and a 7-day sparkline.
+
+## v0.11.0 — You on the right, Blaze on the left
+
+- **Chat layout.** What you send now stays in the scrollback on the right, like a chat app, and Blaze's replies stay on
+  the left. Your message wraps to about 70% of the terminal, sits flush right with its text reading normally, and opens
+  with an accent `‹`. The same layout is used for a message sent while Blaze works and for one queued until the step
+  ends (with a dim "sent while Blaze worked" / "runs when this step is done" under it). Plain (`NO_COLOR`) or very
+  narrow terminals keep the old left-hand `› text` line. New `ui.UserLines` (`internal/ui/bubble.go`) with tests.
+
+## v0.10.1 — Safety and stability fixes
+
+- **Shell safety in every mode.** The hard blocklist (wiping disks, the system or your home folder) now checks every
+  shell command in every mode, not only when a narrow pattern matched, and catches dodges like `rm -r -f /`,
+  `rm -rf -- ~`, `"$HOME"`, `${HOME}`, `%USERPROFILE%`, `find ~ -delete`, `Remove-Item C:\ -Recurse`. Auto asks first for
+  recursive deletes of absolute/home/glob/variable targets, `wipefs`, `fdisk`, `parted`, `mkfs`, `dd of=`,
+  `Format-Volume`, `bcdedit`, `vssadmin delete`, `shred`. One check (`internal/tools/guard.go`) serves the main agent,
+  background agents and specialists. It is pattern matching, not a sandbox.
+- **`run_code` is checked** like `run_shell` (shell, PowerShell, Python and Node snippets).
+- **The `git` tool no longer goes through a shell.** Arguments are split and git runs directly, so
+  `status && rm -rf src` is refused. Plan mode allows only read-only git (no `-c`, `-O`, `--output`, `--exec`…), and
+  background agents and specialists share the same strict check. Risky git (`push --force`, `reset --hard`, `clean`,
+  `branch -D`…) asks first in Auto.
+- **Project MCP servers need your trust.** A folder's `.mcp.json` / `.blaze/mcp.json` servers no longer start until you
+  trust the folder (a y/N prompt in chat, or `blaze mcp trust`; `blaze mcp untrust` undoes it). Trust is tied to the
+  files' SHA-256, so any edit asks again. Untrusted files get no `${VAR}` expansion, a project server never replaces a
+  global one with the same name, and "Always allow" is keyed by source, name and command/URL. `mcp.json` and
+  `mcp-allow.json` are written atomically.
+- **Scheduling can't erase your crontab.** Only "no crontab for user" counts as empty; any other `crontab -l` error
+  stops without writing. Other lines are kept exactly, and a backup goes to `~/.blaze/crontab.bak`.
+- **Connections stay connected through hiccups.** Only a real refusal (401, or `invalid_grant` / `invalid_client` /
+  `unauthorized_client`) marks a connector Expired. 5xx, 429, timeouts, network errors and Esc no longer do. Key sync
+  signs you out only on a real 401, not when offline.
+- **Esc no longer crashes** the `/login` picker or a background agent's multiple-choice question.
+
 ## v0.10.0 — Blaze knows itself
 
 - **ABOUT YOU.** Every chat starts with a short, live block: you are Blaze CLI (version), made by Luke (Lackson Kapapa,

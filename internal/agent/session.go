@@ -75,6 +75,29 @@ func (a *Agent) LastUser() string {
 	return ""
 }
 
+// PeekUnfinished returns the last user message of this folder's saved
+// conversation when that conversation did not end with an assistant reply,
+// without loading it ("" otherwise). The start screen offers it to /resume.
+func PeekUnfinished(root string) string {
+	b, err := os.ReadFile(sessionFile(root))
+	if err != nil {
+		return ""
+	}
+	var h []llm.Message
+	if json.Unmarshal(b, &h) != nil || len(h) == 0 {
+		return ""
+	}
+	if last := h[len(h)-1]; last.Role == "assistant" && len(last.ToolCalls) == 0 && strings.TrimSpace(last.Content) != "" {
+		return ""
+	}
+	for i := len(h) - 1; i >= 0; i-- {
+		if h[i].Role == "user" {
+			return strings.TrimSpace(h[i].Content)
+		}
+	}
+	return ""
+}
+
 // Compact swaps the conversation for a tight summary, freeing room in the context.
 func (a *Agent) Compact(ctx context.Context) (int, error) {
 	if len(a.History) < 2 {

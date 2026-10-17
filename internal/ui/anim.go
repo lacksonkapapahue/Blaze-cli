@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/lacksonkapapahue/blaze-cli/internal/steps"
 )
 
 // Animate is true when motion is welcome.
@@ -130,6 +132,7 @@ type Spinner struct {
 	done  chan struct{}
 	on    bool
 	since time.Time
+	phase string // thinking / reading / searching / editing / running (w1_turn.go)
 }
 
 // sparks: braille dots that rise through two cells, like embers off a blaze.
@@ -150,12 +153,21 @@ func sparks(i int) string {
 	return string(0x2800+cells[0]) + string(0x2800+cells[1])
 }
 
-func (s *Spinner) Start(text string) {
+func (s *Spinner) Start(text string) { s.StartPhase("", text) }
+
+// StartPhase is Start with the phase given ("" works it out from the words).
+func (s *Spinner) StartPhase(phase, text string) {
+	if text == steps.Writing {
+		w1BreakSteps() // the reply streams between the step marks
+	}
 	if !color || !IsTTY() {
 		return
 	}
+	if phase == "" {
+		phase = steps.PhaseOf(text)
+	}
 	s.mu.Lock()
-	s.text = text
+	s.text, s.phase = text, phase
 	if s.on {
 		s.mu.Unlock()
 		return
@@ -174,9 +186,9 @@ func (s *Spinner) Start(text string) {
 		defer t.Stop()
 		for i := 0; ; i++ {
 			s.mu.Lock()
-			txt, since := s.text, s.since
+			txt, since, phase := s.text, s.since, s.phase
 			s.mu.Unlock()
-			drawLive(spinLine(i, txt, time.Since(since)))
+			drawLive(spinLinePhase(i, phase, txt, time.Since(since)))
 			select {
 			case <-stop:
 				return
@@ -186,46 +198,81 @@ func (s *Spinner) Start(text string) {
 	}()
 }
 
-func spinLine(i int, txt string, el time.Duration) string {
+// spinLinePhase draws the working line: embers, the phrase in its phase's motion,
+// then (as room allows) the goal-gradient rail, the step count, the turn's elapsed
+// time, the stop hint and the host's status. On a narrow terminal the extras drop
+// off from the least useful end.
+func spinLinePhase(i int, phase, txt string, el time.Duration) string {
 	W := termWidth()
-	tail := ""
+	tv := w1TurnSnapshot()
+	if tv.active {
+		el = tv.el
+	}
+	var extras []string // in order of importance
+	if r := w1Rail(tv.done, tv.total); r != "" {
+		extras = append(extras, r)
+	}
+	if tv.active && tv.step > 0 {
+		extras = append(extras, Weak(fmt.Sprintf("step %d", tv.step)))
+	}
 	if el >= 2*time.Second {
-		tail = "  " + Weak(el.Round(time.Second).String())
+		extras = append(extras, Weak(w1Clock(el)))
 		if el >= 4*time.Second {
-			tail += Weak(" · ctrl-c to stop")
+			extras = append(extras, Weak("ctrl-c to stop"))
 		}
 	}
+	status := ""
 	if StatusLine != nil {
 		if st := StatusLine(); st != "" {
-			tail += Weak("  ·  ") + st
+			status = Weak("  ·  ") + st
 		}
 	}
-	tail += typeaheadTail()
+	ta := typeaheadTail()
+	build := func(n int) string {
+		if n == 0 {
+			return ""
+		}
+		return "  " + strings.Join(extras[:n], Weak(" · "))
+	}
+	n := len(extras)
+	tail := build(n) + status + ta
 	room := W - 6 - width(tail)
+	for room < 16 && (n > 0 || status != "") {
+		if status != "" {
+			status = ""
+		} else {
+			n--
+		}
+		tail = build(n) + status + ta
+		room = W - 6 - width(tail)
+	}
 	if room < 8 {
 		tail, room = "", W-6
 	}
 	r := []rune(clip(txt, room))
-	// glint: a soft highlight that glides along the text and loops
-	g := i % (len(r) + 8)
 	var b strings.Builder
 	for k, c := range r {
-		d := k - g + 2
-		if d < 0 {
-			d = -d
-		}
-		col := pal.sub
-		if d < 3 {
-			col = mix(pal.ink, pal.sub, float64(d)/3)
-		}
-		b.WriteString(fg(col) + string(c))
+		b.WriteString(fg(w1Shimmer(phase, i, k, len(r))) + string(c))
 	}
 	b.WriteString(reset())
 	pulse := mix(pal.accent, pal.hair, 0.35*float64((i/2)%2))
-	return "  " + fg(pulse) + sparks(i) + reset() + " " + b.String() + tail
+	tick := i
+	if phase == PhaseThinking {
+		// thinking: the embers rise at half speed and glow softer
+		tick = i / 2
+		pulse = mix(pal.accent, pal.hair, 0.3+0.25*float64((i/4)%2))
+	}
+	return "  " + fg(pulse) + sparks(tick) + reset() + " " + b.String() + tail
 }
 
-func (s *Spinner) Set(text string) { s.mu.Lock(); s.text = text; s.mu.Unlock() }
+func (s *Spinner) Set(text string) {
+	if text == steps.Writing {
+		w1BreakSteps()
+	}
+	s.mu.Lock()
+	s.text, s.phase = text, steps.PhaseOf(text)
+	s.mu.Unlock()
+}
 
 func (s *Spinner) Stop() {
 	s.mu.Lock()
@@ -263,6 +310,10 @@ func StepDone(ok bool, what, result string, took time.Duration) {
 	if room > 6 && result != "" {
 		res = "  " + Weak(clip(result, room))
 	}
+	if w1StepGutter() {
+		// a hairline joins this mark to the one above it (a step timeline)
+		Println("  " + hair("│"))
+	}
 	Println(left + res + d)
 }
 
@@ -274,6 +325,10 @@ func Footer(route string, took time.Duration) {
 // Goodbye fades the exit line out of the accent.
 func Goodbye() {
 	msg := "See you."
+	st := SessionSoFar()
+	if rc := RecapText(st.Tasks, st.Files, time.Since(st.Started)); rc != "" {
+		Println("  " + hair("──") + " " + Weak(clip(rc, max(10, termWidth()-8))))
+	}
 	if !Animate() {
 		Println("  " + Weak(msg))
 		return
@@ -397,10 +452,19 @@ func welcome(version, model, where, tips string, anim bool) {
 		Sub("Blaze "+version+" · ") + Ink(model),
 		Weak(where),
 	}
-	head := "Made for you."
+	// the headline greets by the time of day ("Good morning."), the old line as a fallback
+	name, resume := w1WelcomeExtras()
+	head := TimeGreeting(time.Now().Hour(), name)
+	if os.Getenv("BLAZE_NO_GREETING") != "" {
+		head = "Made for you."
+	}
 	markW := 9
 	rowsN := len(bGlyph)
 
+	rr := ""
+	if r := w1ResumeRow(resume, inner-4); r != "" {
+		rr = "   " + r
+	}
 	frame := func(t int, ps []particle, glitch map[int]bool, typed int) string {
 		var sb strings.Builder
 		sb.WriteString("  " + hair("┌"+strings.Repeat("─", inner)+"┐") + "\r\n")
@@ -409,8 +473,13 @@ func welcome(version, model, where, tips string, anim bool) {
 			// the mark, with particles riding over the ink
 			gl := []rune(bGlyph[r])
 			var mk strings.Builder
-			mk.WriteString("\x1b[48;2;" + pal.ink + "m")
-			for c := 0; c < markW; c++ {
+			if !color {
+				// no colour: the glyph alone (no raw escapes on a plain terminal)
+				mk.WriteString(string(gl[:markW]))
+			} else {
+				mk.WriteString(bgEsc(pal.ink))
+			}
+			for c := 0; c < markW && color; c++ {
 				ch := string(gl[c])
 				col := paperRGB()
 				if ch == " " {
@@ -421,7 +490,7 @@ func welcome(version, model, where, tips string, anim bool) {
 						}
 					}
 				}
-				mk.WriteString("\x1b[38;2;" + col + "m" + ch)
+				mk.WriteString(fg(col) + ch)
 			}
 			mk.WriteString(reset())
 			var txt string
@@ -449,12 +518,19 @@ func welcome(version, model, where, tips string, anim bool) {
 			sb.WriteString("  " + hair("│") + line + strings.Repeat(" ", max(0, inner-width(line))) + hair("│") + "\r\n")
 		}
 		sb.WriteString("  " + hair("│") + strings.Repeat(" ", inner) + hair("│") + "\r\n")
+		if rr != "" {
+			// pick up where you left off: the last unfinished prompt and how to reload it
+			sb.WriteString("  " + hair("│") + rr + strings.Repeat(" ", max(0, inner-width(rr))) + hair("│") + "\r\n")
+		}
 		tl := "   " + clipStyled(tips, inner-4)
 		sb.WriteString("  " + hair("│") + tl + strings.Repeat(" ", max(0, inner-width(tl))) + hair("│") + "\r\n")
 		sb.WriteString("  " + hair("└"+strings.Repeat("─", inner)+"┘") + "\r\n")
 		return sb.String()
 	}
 	height := rowsN + 5
+	if rr != "" {
+		height++
+	}
 
 	Println("")
 	if !anim {

@@ -264,20 +264,25 @@ func TestLoadMerge(t *testing.T) {
 	home, dir := t.TempDir(), t.TempDir()
 	writeJSON(t, GlobalFile(home), `{"mcpServers":{"a":{"command":"a-global"},"b":{"url":"https://b"},"c":{"command":"c","disabled":true}}}`)
 	writeJSON(t, filepath.Join(dir, ".mcp.json"), `{"mcpServers":{"a":{"command":"a-dotmcp"},"d":{"command":"d","args":["x"]}}}`)
-	writeJSON(t, filepath.Join(dir, ".blaze", "mcp.json"), `{"mcpServers":{"a":{"command":"a-project"}}}`)
+	writeJSON(t, filepath.Join(dir, ".blaze", "mcp.json"), `{"mcpServers":{"a":{"command":"a-project"},"d":{"command":"d","args":["y"]}}}`)
 	ss, warns := Load(home, dir)
-	if len(warns) != 0 || len(ss) != 4 {
+	// The project's "a" can't replace the global "a": it's dropped with a warning.
+	if len(warns) != 1 || !strings.Contains(warns[0], `"a" ignored`) || len(ss) != 4 {
 		t.Fatalf("%+v %v", ss, warns)
 	}
 	got := map[string]Server{}
 	for _, s := range ss {
 		got[s.Name] = s
 	}
-	if got["a"].Command != "a-project" || got["b"].URL != "https://b" || !got["c"].Disabled || got["d"].Args[0] != "x" {
+	if got["a"].Command != "a-global" || got["a"].Project || !got["a"].Trusted || got["b"].URL != "https://b" || !got["c"].Disabled {
 		t.Fatalf("merge: %+v", got)
 	}
+	// Within the project, .blaze/mcp.json wins over .mcp.json; untrusted until trusted.
+	if d := got["d"]; d.Args[0] != "y" || !d.Project || d.Trusted || d.MayStart() {
+		t.Fatalf("project server: %+v", d)
+	}
 	writeJSON(t, filepath.Join(dir, ".mcp.json"), `{oops`)
-	if _, warns := Load(home, dir); len(warns) != 1 {
+	if _, warns := Load(home, dir); len(warns) != 2 {
 		t.Fatalf("bad file should warn: %v", warns)
 	}
 }
@@ -410,7 +415,7 @@ func TestGating(t *testing.T) {
 	if r := m.Call(ctx, "mcp__fake__echo", `{"text":"d"}`, auto); r != "echo: d" || asked != 3 {
 		t.Fatalf("always: %q asked=%d", r, asked)
 	}
-	if !New(m.Home, "", "").Allowed("fake", "echo") {
+	if !m.Allowed("fake", "echo") || New(m.Home, "", "").Allowed("fake", "echo") {
 		t.Fatal("always allow wasn't saved")
 	}
 	// Autopilot: never asks; tool errors come back as errors.

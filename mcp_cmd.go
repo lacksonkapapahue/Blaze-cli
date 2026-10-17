@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -38,8 +39,97 @@ func getMCP() *mcp.Manager {
 	return mcpMgr
 }
 
-// startMCP launches the configured servers in the background, so startup isn't slowed.
-func startMCP() { getMCP().Start() }
+// startMCP launches the configured servers in the background, so startup isn't
+// slowed. Project servers of an untrusted folder are skipped with a notice.
+func startMCP() { startMCPSession(false) }
+
+// startMCPSession is startMCP for a session: chat (interactive, with a
+// terminal) asks once whether to trust the folder's project servers.
+func startMCPSession(chat bool) {
+	interactive := chat && ui.IsTTY()
+	if st, _ := os.Stdin.Stat(); st == nil || st.Mode()&os.ModeCharDevice == 0 {
+		interactive = false
+	}
+	cwd, _ := os.Getwd()
+	askProjectTrust(config.Dir(), cwd, interactive)
+	getMCP().Start()
+}
+
+// askProjectTrust handles a folder whose .mcp.json / .blaze/mcp.json isn't
+// trusted (or changed since): in chat it lists each server's command or URL
+// and asks y/N, saving the trust on yes; otherwise it prints a one-line notice.
+// Untrusted project servers never start.
+func askProjectTrust(home, dir string, interactive bool) {
+	p := mcp.LoadProject(home, dir)
+	if len(p.Servers) == 0 || p.Trusted() {
+		return
+	}
+	what := "isn't trusted"
+	if p.Trust == mcp.TrustChanged {
+		what = "changed since you trusted it"
+	}
+	if !interactive {
+		fmt.Fprintf(os.Stderr, "blaze: skipped %d MCP server%s from this folder's project config (%s); run `blaze mcp trust` here to allow them.\n", len(p.Servers), plural(len(p.Servers)), what)
+		return
+	}
+	rows := []string{ui.Sub("This folder's MCP config " + what + ". Starting these runs them on your PC:")}
+	rows = append(rows, projectServerRows(p)...)
+	ui.Box(ui.AccentLabel("project mcp servers"), rows)
+	ans, err := ui.ReadLine("  " + ui.Ink("Trust this folder and start them? ") + ui.Weak("[y/N] "))
+	if err == nil {
+		switch strings.ToLower(strings.TrimSpace(ans)) {
+		case "y", "yes":
+			if err := mcp.Trust(home, dir, p.Hash); err != nil {
+				ui.Println("  " + ui.Ink("■ ") + ui.Sub("couldn't save the trust: "+err.Error()))
+				return
+			}
+			ui.Println("  " + ui.Accent("■ ") + ui.Sub("Trusted. They start now; editing the file asks again."))
+			return
+		}
+	}
+	ui.Println("  " + ui.Weak("Not started. `blaze mcp trust` here (or /mcp trust) allows them later."))
+}
+
+// projectServerRows lists project servers with what they run and where they're defined.
+func projectServerRows(p mcp.Project) []string {
+	var rows []string
+	for _, s := range p.Servers {
+		rows = append(rows, ui.Ink(fmt.Sprintf("%-14s", s.Name))+ui.Sub(" "+s.Kind()+" ")+ui.Accent(clipStr(s.Target(), 200)))
+		extra := shortPath(s.Source)
+		if len(s.Env) > 0 || len(s.Headers) > 0 {
+			var ks []string
+			for k := range s.Env {
+				ks = append(ks, k)
+			}
+			for k := range s.Headers {
+				ks = append(ks, k)
+			}
+			sort.Strings(ks)
+			extra += " · sets " + strings.Join(ks, ", ")
+		}
+		rows = append(rows, "    "+ui.Weak(extra))
+	}
+	return rows
+}
+
+// keepProjectTrust runs an edit of file and, when file is this folder's project
+// file and the folder was trusted (or had no project servers) before, trusts
+// the result: the user's own `blaze mcp add --project` shouldn't lock them out.
+func keepProjectTrust(home, dir, file string, edit func() error) error {
+	if !mcp.IsProjectFile(home, dir, file) {
+		return edit()
+	}
+	before := mcp.LoadProject(home, dir)
+	if err := edit(); err != nil {
+		return err
+	}
+	if before.Trusted() || len(before.Servers) == 0 && len(before.Warnings) == 0 {
+		if after := mcp.LoadProject(home, dir); after.Hash != "" {
+			return mcp.Trust(home, dir, after.Hash)
+		}
+	}
+	return nil
+}
 
 // stopMCP stops every server (on exit and before a restart).
 func stopMCP() {
@@ -71,6 +161,7 @@ func mcpUsage() {
 		ui.Accent("blaze mcp add NAME --url URL") + ui.Sub("           a remote server; --header K=V (repeatable)"),
 		ui.Accent("blaze mcp remove NAME") + ui.Sub("                  remove it (and its \"Always allow\" choices)"),
 		ui.Accent("blaze mcp enable|disable NAME") + ui.Sub("          turn it on or off"),
+		ui.Accent("blaze mcp trust|untrust") + ui.Sub("                allow (or stop) this folder's .mcp.json servers"),
 		ui.Weak("--project: write ./.blaze/mcp.json, not ~/.blaze/mcp.json (shared with Desktop)"),
 	})
 }
@@ -107,7 +198,7 @@ func cmdMCP(args []string, inChat bool) error {
 		if project {
 			file = filepath.Join(cwd, ".blaze", "mcp.json")
 		}
-		if err := mcp.Add(file, s); err != nil {
+		if err := keepProjectTrust(home, cwd, file, func() error { return mcp.Add(file, s) }); err != nil {
 			return err
 		}
 		ui.StepDone(true, "Added MCP server "+s.Name, shortPath(file), 0)
@@ -121,7 +212,7 @@ func cmdMCP(args []string, inChat bool) error {
 		if file == "" {
 			return errors.New("there's no MCP server called " + name + "; `blaze mcp list` shows them")
 		}
-		if _, err := mcp.Remove(file, name); err != nil {
+		if err := keepProjectTrust(home, cwd, file, func() error { _, err := mcp.Remove(file, name); return err }); err != nil {
 			return err
 		}
 		_ = getMCP().Forget(name)
@@ -137,10 +228,32 @@ func cmdMCP(args []string, inChat bool) error {
 			return errors.New("there's no MCP server called " + name + "; `blaze mcp list` shows them")
 		}
 		off := sub == "disable" || sub == "off"
-		if _, err := mcp.SetDisabled(file, name, off); err != nil {
+		if err := keepProjectTrust(home, cwd, file, func() error { _, err := mcp.SetDisabled(file, name, off); return err }); err != nil {
 			return err
 		}
 		ui.StepDone(true, map[bool]string{true: "Turned off ", false: "Turned on "}[off]+name, shortPath(file), 0)
+		changed = true
+	case "trust":
+		p := mcp.LoadProject(home, cwd)
+		if len(p.Servers) == 0 {
+			return errors.New("this folder has no project MCP servers (.mcp.json or .blaze/mcp.json)")
+		}
+		if err := mcp.Trust(home, cwd, p.Hash); err != nil {
+			return err
+		}
+		ui.Box(ui.AccentLabel("trusted"), append([]string{ui.Sub("These may now start in " + shortPath(p.Dir) + ":")}, projectServerRows(p)...))
+		ui.Println("  " + ui.Weak("Editing the project file makes it untrusted again. `blaze mcp untrust` undoes this."))
+		changed = true
+	case "untrust":
+		ok, err := mcp.Untrust(home, cwd)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			ui.Println("  " + ui.Weak("This folder wasn't trusted."))
+			return nil
+		}
+		ui.StepDone(true, "Untrusted this folder", shortPath(mcp.FolderKey(cwd)), 0)
 		changed = true
 	case "reload", "restart":
 		if !inChat {
@@ -293,6 +406,9 @@ func mcpStatus(m *mcp.Manager, wait bool) {
 			word = "failed"
 		case mcp.Starting:
 			word = "starting…"
+		case mcp.Untrusted:
+			mark = ui.Ink("! ")
+			word = "untrusted · not started"
 		}
 		rows = append(rows, mark+ui.Ink(fmt.Sprintf("%-14s", st.Server.Name))+ui.Sub(fmt.Sprintf(" %-6s %s", st.Server.Kind(), word)))
 		rows = append(rows, "    "+ui.Weak(clipStr(st.Server.Target(), 70)+" · "+shortPath(st.Server.Source)))
@@ -308,6 +424,16 @@ func mcpStatus(m *mcp.Manager, wait bool) {
 		}
 	}
 	ui.Box(ui.AccentLabel("mcp servers"), rows)
+	cwd, _ := os.Getwd()
+	switch p := mcp.LoadProject(config.Dir(), cwd); {
+	case len(p.Servers) == 0:
+	case p.Trusted():
+		ui.Println("  " + ui.Accent("■ ") + ui.Sub("This folder's project servers are trusted.") + ui.Weak(" blaze mcp untrust to stop them"))
+	case p.Trust == mcp.TrustChanged:
+		ui.Println("  " + ui.Ink("! ") + ui.Sub("This folder's project MCP file changed since you trusted it, so its servers didn't start.") + ui.Weak(" blaze mcp trust to allow them"))
+	default:
+		ui.Println("  " + ui.Ink("! ") + ui.Sub("This folder's project servers aren't trusted, so they didn't start.") + ui.Weak(" blaze mcp trust to allow them"))
+	}
 	ui.Println("  " + ui.Weak("blaze mcp add · remove · enable · disable   (in chat: /mcp reload after editing mcp.json)"))
 }
 
@@ -336,6 +462,8 @@ func mcpDoctor(add func(name string, ok bool, detail string)) {
 			add(name, true, fmt.Sprintf("%d tools · %.1fs", len(st.Tools), st.Took.Seconds()))
 		case mcp.Disabled:
 			add(name, true, "turned off")
+		case mcp.Untrusted:
+			add(name, true, "project server not trusted, not started (blaze mcp trust)")
 		case mcp.Starting:
 			add(name, false, "didn't finish starting in time")
 		default:
