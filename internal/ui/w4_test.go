@@ -122,6 +122,26 @@ func TestSplitRepliesKeepsKeys(t *testing.T) {
 	}
 }
 
+func TestOSC11ReplyComplete(t *testing.T) {
+	osc := "\x1b]11;rgb:ffff/ffff/ffff\x1b\\"
+	for _, tc := range []struct {
+		name string
+		got  string
+		want bool
+	}{
+		{"no reply", "", false},
+		{"incomplete OSC", "\x1b]11;rgb:ffff/ffff/ffff", false},
+		{"complete OSC", osc, true},
+		{"complete unsupported OSC", "\x1b]11;unsupported\x07", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := osc11ReplyComplete([]byte(tc.got)); got != tc.want {
+				t.Fatalf("osc11ReplyComplete() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestTo256(t *testing.T) {
 	cases := map[[3]int]int{
 		{0, 0, 0}:       16,

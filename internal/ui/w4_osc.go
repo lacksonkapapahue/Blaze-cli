@@ -96,6 +96,11 @@ func da1End(b []byte) (start, end int) {
 	return -1, -1
 }
 
+func osc11ReplyComplete(b []byte) bool {
+	_, _, _, _, e, _ := parseOSC11(b)
+	return e > 0
+}
+
 // splitReplies takes what was read after the query and returns the background
 // verdict and the bytes that were not part of either reply (keys typed meanwhile).
 func splitReplies(b []byte) (light, found bool, rest []byte) {
