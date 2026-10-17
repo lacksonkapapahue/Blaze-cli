@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -52,7 +51,7 @@ func TestAllToolSchemasAreProviderSafe(t *testing.T) {
 				}
 			}
 			if tool.Function.Name == "" {
-				t.Error(fmt.Sprintf("tool has no name: %s", raw))
+				t.Errorf("tool has no name: %s", raw)
 			}
 		})
 	}
