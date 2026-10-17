@@ -36,6 +36,11 @@ type typeahead struct {
 	menuIdx  int
 	menuLine string
 	menuOff  string
+
+	// big pastes shown as chips (w3_paste.go)
+	pastes  []pasteSpan
+	spanBuf []rune
+	spanPos int
 }
 
 // OnSend, when set, takes a message sent from the composer while a turn runs
@@ -79,7 +84,7 @@ func StopTypeahead() string {
 	ta.mu.Lock()
 	defer ta.mu.Unlock()
 	rest := string(ta.buf)
-	ta.buf, ta.cur = nil, 0
+	ta.buf, ta.cur, ta.pastes, ta.spanBuf = nil, 0, nil, nil
 	return rest
 }
 
@@ -147,6 +152,7 @@ func (t *typeahead) spawn() {
 	done := t.done
 	taReading.Store(true)
 	t.mu.Unlock()
+	pasteMode(true) // a paste arrives whole, so its newlines don't send it line by line
 	go t.loop(done)
 }
 
@@ -172,6 +178,7 @@ func (t *typeahead) halt() {
 
 func (t *typeahead) loop(done chan struct{}) {
 	defer func() {
+		pasteMode(false)
 		taReading.Store(false)
 		t.mu.Lock()
 		t.reading = false
@@ -201,6 +208,17 @@ func (t *typeahead) loop(done chan struct{}) {
 					break
 				}
 			}
+			if seq == "[200~" { // bracketed paste: insert it whole, newlines and all
+				text := readPaste()
+				if text == "" { // Windows Terminal pastes an image-only clipboard as nothing
+					t.clipPaste(true)
+					continue
+				}
+				t.mu.Lock()
+				t.paste(text)
+				t.mu.Unlock()
+				continue
+			}
 			k := map[string]string{"": "esc", "[A": "up", "OA": "up", "[B": "down", "OB": "down",
 				"[C": "right", "OC": "right", "[D": "left", "OD": "left", "[H": "home", "OH": "home", "[1~": "home", "[7~": "home",
 				"[F": "end", "OF": "end", "[4~": "end", "[8~": "end", "[3~": "del"}[seq]
@@ -213,6 +231,10 @@ func (t *typeahead) loop(done chan struct{}) {
 			}
 			continue
 		}
+		if r == 22 { // Ctrl+V: a clipboard image as a chip, else its text (w3_paste.go)
+			t.clipPaste(false)
+			continue
+		}
 		if line, ok := t.key(r); ok {
 			t.send(line)
 		}
@@ -221,6 +243,7 @@ func (t *typeahead) loop(done chan struct{}) {
 
 // send hands a line Enter sent to OnSend (Blaze answers now), or queues it.
 func (t *typeahead) send(line string) {
+	RecordRecent(line)
 	if OnSend != nil && OnSend(line) {
 		return
 	}
@@ -243,6 +266,10 @@ func (t *typeahead) typeKey(r rune) {
 func (t *typeahead) move(k string) {
 	if t.cur > len(t.buf) || t.cur < 0 {
 		t.cur = len(t.buf)
+	}
+	t.fixSpans()
+	if t.chip(k) {
+		return
 	}
 	switch k {
 	case "left":
@@ -268,6 +295,7 @@ func (t *typeahead) move(k string) {
 func (t *typeahead) key(r rune) (string, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.fixSpans()
 	if t.cur > len(t.buf) || t.cur < 0 {
 		t.cur = len(t.buf)
 	}
@@ -286,6 +314,9 @@ func (t *typeahead) key(r rune) (string, bool) {
 		}
 		return line, true
 	case 127, 8:
+		if t.chip("backspace") {
+			break
+		}
 		if t.cur > 0 {
 			t.buf = append(t.buf[:t.cur-1], t.buf[t.cur:]...)
 			t.cur--

@@ -35,6 +35,7 @@ type Message struct {
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 	Name       string     `json:"name,omitempty"`
+	Images     []string   `json:"-"` // data URLs sent as image parts with Content (images.go); never saved
 }
 
 type Tool struct {
@@ -49,7 +50,8 @@ type Tool struct {
 type Result struct {
 	Text      string
 	ToolCalls []ToolCall
-	Route     string // "Groq · model"
+	Route     string // "Groq · model", or "Blaze · provider/model" through Blaze Cloud
+	Served    Served // Blaze Cloud only: what the gateway says answered
 }
 
 type HTTPError struct {
@@ -61,11 +63,25 @@ func (e *HTTPError) Error() string { return fmt.Sprintf("HTTP %d: %s", e.Code, e
 
 var client = &http.Client{Timeout: 0}
 
-// Chat does one streamed completion against one provider/model.
+// Chat does one streamed completion against one provider/model. For Blaze Cloud
+// (provider "blaze") it adds the task hint, reads which model answered from the
+// gateway's headers into Result.Route/Served, and returns gateway refusals as
+// *GatewayError.
 func Chat(ctx context.Context, p config.Provider, key, model string, msgs []Message, tools []Tool, onText func(string)) (*Result, error) {
+	var extra map[string]any
+	if p.ID == BlazeID {
+		extra = blazeExtra(model, msgs, tools)
+	}
+	return chat(ctx, p, key, model, msgs, tools, extra, onText)
+}
+
+func chat(ctx context.Context, p config.Provider, key, model string, msgs []Message, tools []Tool, extra map[string]any, onText func(string)) (*Result, error) {
 	body := map[string]any{"model": model, "messages": msgs, "stream": true}
 	if len(tools) > 0 {
 		body["tools"] = tools
+	}
+	for k, v := range extra {
+		body[k] = v
 	}
 	b, _ := json.Marshal(body)
 	req, err := http.NewRequestWithContext(ctx, "POST", strings.TrimRight(p.BaseURL, "/")+"/chat/completions", bytes.NewReader(b))
@@ -80,16 +96,30 @@ func Chat(ctx context.Context, p config.Provider, key, model string, msgs []Mess
 		req.Header.Set("HTTP-Referer", "https://github.com/lacksonkapapahue/Blaze-cli")
 		req.Header.Set("X-Title", "Blaze CLI")
 	}
+	if p.ID == BlazeID {
+		req.Header.Set("User-Agent", "Blaze-CLI")
+		req.Header.Set("X-Blaze-Client", "cli")
+	}
 	resp, err := client.Do(req)
 	if err != nil {
+		if p.ID == BlazeID && ctx.Err() == nil {
+			return nil, &GatewayError{Err: err}
+		}
 		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4000))
+		if p.ID == BlazeID {
+			return nil, gatewayError(resp.StatusCode, resp.Header, raw)
+		}
 		return nil, &HTTPError{resp.StatusCode, cleanErr(string(raw))}
 	}
 	res := &Result{}
+	if p.ID == BlazeID {
+		res.Served = servedFrom(resp.Header)
+		res.Route = res.Served.RouteLabel(model)
+	}
 	calls := map[int]*ToolCall{}
 	var text strings.Builder
 	sc := bufio.NewScanner(resp.Body)
@@ -126,6 +156,9 @@ func Chat(ctx context.Context, p config.Provider, key, model string, msgs []Mess
 			continue
 		}
 		if chunk.Error != nil {
+			if p.ID == BlazeID {
+				return nil, &GatewayError{Status: 500, Message: chunk.Error.Message}
+			}
 			return nil, &HTTPError{500, chunk.Error.Message}
 		}
 		for _, ch := range chunk.Choices {
@@ -278,6 +311,7 @@ func PickModel(ids []string) string {
 type health struct {
 	coolUntil time.Time
 	lastErr   string
+	gw        *GatewayError // Blaze Cloud's last refusal, said again while it cools
 }
 
 var (
@@ -285,21 +319,67 @@ var (
 	health_ = map[string]*health{}
 )
 
+// blazeRetryWait is the pause before a quiet retry of a Blaze Cloud call (tests shorten it).
+var blazeRetryWait = func(attempt, retryAfter int) time.Duration {
+	if retryAfter > 0 && retryAfter <= 5 {
+		return time.Duration(retryAfter) * time.Second
+	}
+	return time.Duration(1+2*attempt) * time.Second
+}
+
+// blazeRetryable: worth one quiet retry (no answer, the gateway's side, a short busy).
+// Never 401/403, never the daily allowance.
+func blazeRetryable(ge *GatewayError) bool {
+	switch {
+	case ge.Status == 0:
+		return true
+	case ge.Status == http.StatusServiceUnavailable || ge.Status == http.StatusTooManyRequests:
+		return !ge.Quota() && ge.RetryAfter <= 5
+	case ge.Status >= 500:
+		return true
+	}
+	return false
+}
+
+// ChainError is "no model could answer". It unwraps to Blaze Cloud's own failure
+// (a *GatewayError) when Blaze Cloud was tried, so callers can tell an expired
+// sign-in or a used-up allowance from the rest.
+type ChainError struct {
+	Failures []string
+	Blaze    *GatewayError
+}
+
+func (e *ChainError) Error() string {
+	return "no model could answer:\n  • " + strings.Join(e.Failures, "\n  • ") + "\nRun `blaze doctor` to check your models."
+}
+
+func (e *ChainError) Unwrap() error {
+	if e.Blaze == nil {
+		return nil
+	}
+	return e.Blaze
+}
+
 // Complete tries each chain entry in order, skipping ones cooling down after errors.
+// Signed in, Blaze Cloud is first (see RouteChain); the user's own keys follow.
 func Complete(ctx context.Context, cfg *config.Config, msgs []Message, tools []Tool, onText func(string)) (*Result, error) {
 	var failures []string
+	var blazeErr *GatewayError
 	tried := 0
-	chain := cfg.RouteChain()
+	chain := RouteChain(cfg)
 	for _, e := range chain {
-		p, ok := config.ProviderByID(e.Provider)
+		p, ok := ProviderFor(e.Provider)
 		if !ok {
 			continue
 		}
-		key := cfg.Key(p.ID)
+		key := KeyFor(cfg, p.ID)
 		if key == "" && !config.Keyless(p.ID) {
 			continue
 		}
 		k := p.ID + "|" + e.Model
+		if p.ID == BlazeID {
+			k += "|" + tokenTag(key) // a new sign-in starts with a clean slate
+		}
 		hmu.Lock()
 		h := health_[k]
 		if h == nil {
@@ -307,8 +387,20 @@ func Complete(ctx context.Context, cfg *config.Config, msgs []Message, tools []T
 			health_[k] = h
 		}
 		cooling := time.Now().Before(h.coolUntil)
+		var last *GatewayError
+		if h.gw != nil {
+			c := *h.gw
+			if c.Quota() || c.Busy() {
+				c.RetryAfter = int(time.Until(h.coolUntil).Seconds() + 0.5)
+			}
+			last = &c
+		}
 		hmu.Unlock()
 		if cooling && tried < len(chain)-1 {
+			if last != nil && blazeErr == nil {
+				blazeErr = last
+				failures = append(failures, p.Name+": "+last.Error())
+			}
 			continue
 		}
 		tried++
@@ -323,12 +415,28 @@ func Complete(ctx context.Context, cfg *config.Config, msgs []Message, tools []T
 				onText(s)
 			}
 		}
-		r, err := Chat(ctx, p, key, model, msgs, tools, wrapped)
+		var r *Result
+		var err error
+		for attempt := 0; ; attempt++ {
+			r, err = Chat(ctx, p, key, model, msgs, tools, wrapped)
+			ge, isGW := AsGateway(err)
+			if err == nil || !isGW || started || ctx.Err() != nil || attempt >= 1 || !blazeRetryable(ge) {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(blazeRetryWait(attempt, ge.RetryAfter)):
+			}
+		}
 		if err == nil {
-			r.Route = p.Name + " · " + model
+			if r.Route == "" {
+				r.Route = p.Name + " · " + model
+			}
 			hmu.Lock()
 			h.coolUntil = time.Time{}
 			h.lastErr = ""
+			h.gw = nil
 			hmu.Unlock()
 			return r, nil
 		}
@@ -337,11 +445,28 @@ func Complete(ctx context.Context, cfg *config.Config, msgs []Message, tools []T
 		}
 		if started {
 			// Half an answer already printed: don't silently restart on another model.
+			if ge, ok := AsGateway(err); ok {
+				return nil, fmt.Errorf("Blaze stopped mid-answer: %w", ge)
+			}
 			return nil, fmt.Errorf("%s stopped mid-answer: %v", p.Name, err)
 		}
 		cool := 60 * time.Second
 		var he *HTTPError
-		if errors.As(err, &he) {
+		if ge, ok := AsGateway(err); ok {
+			blazeErr = ge
+			switch {
+			case ge.Expired() || ge.Status == http.StatusForbidden:
+				cool = 30 * time.Minute // keyed by token: signing in again clears it
+			case ge.Quota():
+				cool = time.Duration(max(ge.RetryAfter, 600)) * time.Second
+				cool = min(cool, 24*time.Hour)
+			case ge.Busy():
+				cool = time.Duration(max(ge.RetryAfter, 5)) * time.Second
+				cool = min(cool, 10*time.Minute)
+			case ge.Status == 0 || ge.Status >= 500:
+				cool = 15 * time.Second
+			}
+		} else if errors.As(err, &he) {
 			switch {
 			case he.Code == 401 || he.Code == 403:
 				cool = 30 * time.Minute
@@ -354,15 +479,20 @@ func Complete(ctx context.Context, cfg *config.Config, msgs []Message, tools []T
 		hmu.Lock()
 		h.coolUntil = time.Now().Add(cool)
 		h.lastErr = err.Error()
+		h.gw, _ = AsGateway(err)
 		hmu.Unlock()
 		msg := err.Error()
-		if len(msg) > 140 {
+		if len(msg) > 140 && blazeErr != err {
 			msg = msg[:140]
 		}
 		failures = append(failures, p.Name+": "+msg)
 	}
 	if len(failures) == 0 {
-		return nil, errors.New("no model is set up yet: run `blaze setup` (a free Gemini or Groq key takes a minute)")
+		return nil, errors.New(MsgSignedOut)
 	}
-	return nil, errors.New("no model could answer:\n  • " + strings.Join(failures, "\n  • ") + "\nRun `blaze doctor` to see which key is the problem.")
+	if blazeErr != nil && len(failures) == 1 {
+		// Only Blaze Cloud was tried (no own keys): its own line, typed.
+		return nil, blazeErr
+	}
+	return nil, &ChainError{Failures: failures, Blaze: blazeErr}
 }

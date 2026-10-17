@@ -67,6 +67,7 @@ func LastActivity() *Activity {
 
 // touchActivity notes output above the prompt (an expanded view can't be erased then).
 func touchActivity() {
+	w1BreakSteps() // something printed between step marks: the gutter starts over
 	actMu.Lock()
 	if actShown > 0 {
 		actTouched = true
@@ -77,15 +78,93 @@ func touchActivity() {
 // Worked is the dim line a turn collapses to: "── Worked · 5 steps · 12s · ctrl+o to
 // expand · model". With no steps it is the plain footer.
 func Worked(route string, n int, took time.Duration) {
+	workedChips(route, n, took, TurnChips{})
+}
+
+// WorkedTurn is Worked for a finished turn's activity: the line earns its chips
+// ("+12 −3 · 4 files · tests ✓"), plays the finish sweep, and the turn is added to
+// the session recap. It also ends the working line's turn state.
+func WorkedTurn(route string, a *Activity, took time.Duration) {
+	c := ChipsOf(a)
+	n := 0
+	if a != nil {
+		n = len(a.Steps)
+	}
+	RecordSessionTurn(c.Paths)
+	EndTurn()
+	workedChips(route, n, took, c)
+}
+
+func workedChips(route string, n int, took time.Duration, c TurnChips) {
+	w1BreakSteps()
 	if n == 0 {
 		Footer(route, took)
 		return
 	}
-	line := workedText(n, took.Seconds())
+	W := termWidth()
+	base := strings.TrimSuffix(workedText(n, took.Seconds()), " · ctrl+o to expand")
+	hint, rt := " · ctrl+o to expand", ""
 	if route != "" {
-		line += " · " + route
+		rt = " · " + route
 	}
-	Println("\n  " + hair("──") + " " + Weak(line))
+	chips := w1ChipParts(c, true)
+	plainChips := w1ChipParts(c, false)
+	// narrow terminal: drop the model, then the hint, then the chips from the end
+	fits := func() bool {
+		w := 6 + len([]rune(base+hint+rt))
+		for _, p := range plainChips {
+			w += 3 + width(p)
+		}
+		return w <= W-1
+	}
+shrink:
+	for !fits() {
+		switch {
+		case rt != "":
+			rt = ""
+		case hint != "":
+			hint = ""
+		case len(plainChips) > 0:
+			plainChips, chips = plainChips[:len(plainChips)-1], chips[:len(chips)-1]
+		default:
+			base = clip(base, max(8, W-8))
+			break shrink
+		}
+	}
+	tail := ""
+	for _, ch := range chips {
+		tail += Weak(" · ") + ch
+	}
+	tail += Weak(hint + rt)
+	Println("")
+	if Animate() {
+		w1Sweep(base)
+	}
+	Println("  " + hair("──") + " " + Weak(base) + tail)
+}
+
+// w1Sweep is the finish moment: an accent band runs once along "Worked · …" and
+// settles into the dim line (about a quarter second). Held under dockMu so a line
+// printed over a live composer can't land in the middle of it.
+func w1Sweep(text string) {
+	r := []rune(text)
+	dockMu.Lock()
+	defer dockMu.Unlock()
+	hideCursor()
+	defer ShowCursor()
+	for p := 0; p <= len(r)+4; p += 2 {
+		var b strings.Builder
+		for k, c := range r {
+			col := pal.weak
+			if d := p - k; d >= 0 && d < 5 {
+				col = mix(pal.accent, pal.weak, float64(d)/5)
+			}
+			b.WriteString(fg(col) + string(c))
+		}
+		Printf("\r  %s %s%s", fg(mix(pal.accent, pal.hair, float64(p)/float64(len(r)+4)))+"──", b.String(), reset())
+		sleep(14)
+	}
+	Printf("\r\x1b[2K")
 }
 
 func workedText(n int, secs float64) string {
@@ -100,7 +179,12 @@ func activityLines(a *Activity, w int) []string {
 	}
 	sum := strings.TrimPrefix(steps.WorkedLine(len(a.Steps), a.Seconds), "Worked · ")
 	out := []string{AccentLabel("last steps") + Weak("  "+sum+" · ctrl+o to collapse")}
-	for _, s := range a.Steps {
+	for si, s := range a.Steps {
+		// the hairline gutter joins each mark to the next (the last step's details hang free)
+		ind := "    "
+		if si < len(a.Steps)-1 {
+			ind = hair("│") + "   "
+		}
 		mark := Accent("■")
 		if !s.OK {
 			mark = Ink("□")
@@ -112,23 +196,28 @@ func activityLines(a *Activity, w int) []string {
 		out = append(out, mark+" "+Ink(s.Plain)+d)
 		for i, l := range strings.Split(strings.TrimRight(s.Detail, "\n"), "\n") {
 			if i == 8 {
-				out = append(out, "    "+Weak("…"))
+				out = append(out, ind+Weak("…"))
 				break
 			}
-			out = append(out, "    "+Accent(strings.ReplaceAll(l, "\t", "  ")))
+			out = append(out, ind+Accent(strings.ReplaceAll(l, "\t", "  ")))
 		}
 		res := strings.Split(strings.TrimRight(s.Result, "\n"), "\n")
 		for i, l := range res {
 			if i == 6 {
-				out = append(out, "    "+Weak(fmt.Sprintf("… %d more lines", len(res)-6)))
+				out = append(out, ind+Weak(fmt.Sprintf("… %d more lines", len(res)-6)))
 				break
 			}
 			if strings.TrimSpace(l) != "" || len(res) > 1 {
-				out = append(out, "    "+Sub(strings.ReplaceAll(l, "\t", "  ")))
+				out = append(out, ind+Sub(strings.ReplaceAll(l, "\t", "  ")))
 			}
 		}
 		if s.DiffPath != "" {
-			out = append(out, capture(func() { Diff(s.DiffPath, s.Before, s.After) })...)
+			for _, l := range capture(func() { Diff(s.DiffPath, s.Before, s.After) }) {
+				if si < len(a.Steps)-1 && strings.HasPrefix(l, "  ") {
+					l = hair("│") + " " + l[2:] // keep the gutter running past the diff
+				}
+				out = append(out, l)
+			}
 		}
 	}
 	for i, l := range out {

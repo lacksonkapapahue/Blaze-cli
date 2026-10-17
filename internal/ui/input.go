@@ -159,6 +159,7 @@ func FocusReporting(on bool) {
 		Printf("\x1b[?1004h")
 		return
 	}
+	Printf("\x1b[?2004l") // bracketed paste off too, whoever left it on
 	if !focusOn {
 		return
 	}

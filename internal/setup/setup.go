@@ -95,7 +95,7 @@ func FromEnv(cfg *config.Config) bool {
 
 // Run is the interactive wizard.
 func Run(cfg *config.Config, in *sysinfo.Info) {
-	ui.BannerAnimated("setup", "Let's get Blaze running on this PC. About a minute.")
+	ui.BannerAnimated("setup", "Let's get Blaze running on this PC. Sign in and you're done: no API keys.")
 	ui.Println("  " + ui.Label("01 · detecting your pc"))
 	ShowPC(*in)
 
@@ -122,9 +122,27 @@ func Run(cfg *config.Config, in *sysinfo.Info) {
 		*in = sysinfo.Detect()
 	}
 
-	// Models.
-	ui.Println("\n  " + ui.Label("03 · ai model"))
-	ui.Println("  " + ui.Sub("Blaze runs on free model tiers. Add one or more; it switches between them when one is busy."))
+	// Blaze account: the models come with it, no API keys needed.
+	ui.Println("\n  " + ui.Label("03 · blaze account"))
+	signedIn := SignInStep(true)
+
+	// Your own keys: optional, advanced, tried after Blaze Cloud.
+	ui.Println("\n  " + ui.Label("04 · your own keys (optional)"))
+	if signedIn {
+		ui.Println("  " + ui.Sub("Not needed: Blaze Cloud answers with your account. Your own keys only add fallbacks after it."))
+	} else {
+		ui.Println("  " + ui.Sub("Blaze Cloud needs a Blaze account. Free keys of your own are an advanced extra."))
+	}
+	if !yes("Add your own API keys (advanced)?", false) {
+		cfg.SetupDone = true
+		if err := cfg.Save(); err != nil {
+			ui.Println("  Couldn't save settings: " + err.Error())
+			return
+		}
+		ready(signedIn)
+		return
+	}
+	ui.Println("  " + ui.Sub("Free model tiers. Add one or more; Blaze switches between them when one is busy."))
 	var free []config.Provider
 	for _, p := range config.Providers {
 		if p.Free && !config.Keyless(p.ID) {
@@ -163,8 +181,13 @@ func Run(cfg *config.Config, in *sysinfo.Info) {
 		}
 	}
 	if len(chain) == 0 {
-		ui.Println("\n  " + ui.Ink("No key added, so Blaze will use the keyless model (slower, smaller).") + ui.Sub(" Run ") + ui.Accent("blaze setup") + ui.Sub(" any time to add a free key."))
-		chain = []config.Entry{{Provider: "pollinations", Model: "openai-fast"}}
+		if signedIn {
+			ui.Println("\n  " + ui.Ink("No key added. That's fine: Blaze Cloud answers with your account."))
+			chain = cfg.Chain // keep what was there
+		} else {
+			ui.Println("\n  " + ui.Ink("No key added.") + ui.Sub(" Run ") + ui.Accent("blaze login") + ui.Sub(" for Blaze Cloud (free, no keys)."))
+			chain = cfg.Chain
+		}
 	}
 	cfg.Chain = chain
 	cfg.SetupDone = true
@@ -172,9 +195,17 @@ func Run(cfg *config.Config, in *sysinfo.Info) {
 		ui.Println("  Couldn't save settings: " + err.Error())
 		return
 	}
+	ready(signedIn)
+}
+
+func ready(signedIn bool) {
+	head := ui.Ink("Blaze is set up.") + ui.Sub(" Blaze Cloud answers with your account; no API keys needed.")
+	if !signedIn {
+		head = ui.Ink("Blaze isn't signed in yet.") + ui.Sub(" Run ") + ui.Accent("blaze login") + ui.Sub(" to start (free, no API keys).")
+	}
 	ui.Println("")
 	ui.Box(ui.AccentLabel("ready"), []string{
-		ui.Ink("Blaze is set up."),
+		head,
 		"",
 		ui.Accent("blaze") + ui.Sub("                 chat in this folder"),
 		ui.Accent(`blaze "question"`) + ui.Sub("      one answer and exit"),
@@ -273,34 +304,9 @@ func Doctor(cfg *config.Config, in sysinfo.Info, version string) {
 	}
 	add("Internet", net, map[bool]string{true: "online", false: "can't reach the internet"}[net])
 
-	// Models
-	if len(cfg.Chain) == 0 {
-		add("AI model", false, "no key set up, using the keyless model: run blaze setup")
-	}
-	for _, e := range cfg.RouteChain() {
-		p, ok := config.ProviderByID(e.Provider)
-		if !ok {
-			continue
-		}
-		key := cfg.Key(p.ID)
-		if key == "" && !config.Keyless(p.ID) {
-			add(p.Name, false, "no key saved: run blaze setup")
-			continue
-		}
-		model := e.Model
-		if model == "" {
-			model = p.DefaultModel
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		t0 := time.Now()
-		_, err := llm.Chat(ctx, p, key, model, []llm.Message{{Role: "user", Content: "Reply with OK."}}, nil, nil)
-		cancel()
-		if err != nil {
-			add(p.Name, false, model+": "+trunc(err.Error(), 90))
-		} else {
-			add(p.Name, true, fmt.Sprintf("%s answered in %.1fs", model, time.Since(t0).Seconds()))
-		}
-	}
+	// Models: Blaze Cloud first (the account's models, no keys), then any own keys.
+	cloudDoctor(add)
+	ownModelsDoctor(cfg, add)
 
 	// Memory (blaze.db, shared with Blaze Desktop)
 	if d := tools.DB(); d != nil {
