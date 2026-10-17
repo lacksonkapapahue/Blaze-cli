@@ -138,34 +138,6 @@ func commandExists(name string) bool {
 	return err == nil
 }
 
-func RiskyToolName(name string) bool {
-	name = strings.ToLower(name)
-	terms := []string{"runtime", "process", "capture", "observe", "attach", "device", "adb", "browser", "launch", "run", "spawn", "execute", "shell", "record", "screenshot", "snapshot", "instrument", "hook", "debug", "trace", "probe", "simulate", "emulate", "replay", "start", "stop", "terminate", "kill", "install", "setup", "download", "hopper", "ghidra", "ida", "jadx"}
-	for _, part := range strings.FieldsFunc(name, func(r rune) bool {
-		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9')
-	}) {
-		for _, term := range terms {
-			if part == term || term != "ida" && strings.HasPrefix(part, term) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func AutoReadOnlyToolName(name string) bool {
-	if RiskyToolName(name) {
-		return false
-	}
-	name = strings.ToLower(name)
-	for _, prefix := range []string{"inspect", "analyze", "list"} {
-		if name == prefix || strings.HasPrefix(name, prefix+"_") {
-			return true
-		}
-	}
-	return false
-}
-
 func GlobalFile(home string) string { return mcp.GlobalFile(home) }
 
 // EnableFile adds the exact pinned server definition to a global MCP config.

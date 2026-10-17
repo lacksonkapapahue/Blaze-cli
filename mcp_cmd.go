@@ -141,7 +141,7 @@ func stopMCP() {
 
 // mcpPolicy is how the agent's MCP calls are gated: Plan refuses tools that
 // aren't read-only, Auto asks with the usual approval prompt (with "Always
-// allow"), except explicitly exempted read-only REA tools. Risky REA tools
+// allow"), except REA tools explicitly allowlisted as static. Risky REA tools
 // always ask, including in Autopilot.
 func mcpPolicy(a *agent.Agent) mcp.Policy {
 	return mcp.Policy{

@@ -65,7 +65,8 @@ func cmdREA(args []string, inChat bool) error {
 }
 
 func reaEnableDetail() string {
-	return `"rea": {"command":"npx","args":["-y","rea-agents@6.5.0","mcp"]}`
+	return `"rea": {"command":"npx","args":["-y","rea-agents@6.5.0","mcp"]}` +
+		"\n\nnpx also installs REA's optional Frida dependency."
 }
 
 func showREAConfigTarget() {

@@ -1,6 +1,7 @@
 package rea
 
 import (
+	"bufio"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -12,34 +13,50 @@ import (
 )
 
 func TestSupportsNodeVersion(t *testing.T) {
-	for version, want := range map[string]bool{
-		"v22.18.0": false,
-		"v22.19.0": true,
-		"v23.0.0":  false,
-		"v24.10.0": false,
-		"v24.11.0": true,
-		"v26.0.0":  true,
-		"v25.0.0":  false,
+	for _, tc := range []struct {
+		name, version string
+		want          bool
+	}{
+		{name: "22.18 fails", version: "v22.18.0", want: false},
+		{name: "22.19 ok", version: "v22.19.0", want: true},
+		{name: "23.x fails", version: "v23.0.0", want: false},
+		{name: "24.10 fails", version: "v24.10.0", want: false},
+		{name: "24.11 ok", version: "v24.11.0", want: true},
+		{name: "26.0 ok", version: "v26.0.0", want: true},
 	} {
-		if got := SupportsNodeVersion(version); got != want {
-			t.Errorf("SupportsNodeVersion(%q) = %t, want %t", version, got, want)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			if got := SupportsNodeVersion(tc.version); got != tc.want {
+				t.Errorf("SupportsNodeVersion(%q) = %t, want %t", tc.version, got, tc.want)
+			}
+		})
 	}
 }
 
-func TestRiskyToolName(t *testing.T) {
+func TestREARiskyToolName(t *testing.T) {
 	for name, want := range map[string]bool{
-		"capture_browser_scenario": true,
-		"attach_to_process":        true,
-		"inspect_android_device":   true,
-		"run_process":              true,
-		"trace_native_calls":       true,
-		"install_ghidra":           true,
-		"open_ida_session":         true,
-		"analyze_javascript":       false,
-		"provider_status":          false,
-		"validate_schema":          false,
-		"list_artifacts":           false,
+		"capture_browser_scenario":        true,
+		"attach_to_process":               true,
+		"inspect_android_device":          true,
+		"run_process":                     true,
+		"gdb_console":                     true,
+		"cutter_command":                  true,
+		"list_electron_targets":           true,
+		"inspect_electron_page":           true,
+		"inspect_web_page":                true,
+		"inspect_web_event_listeners":     true,
+		"discover_webmcp_tools":           true,
+		"list_javascript_runtime_targets": true,
+		"execute_rizin_command":           true,
+		"instrument_with_frida":           true,
+		"install_adb_package":             true,
+		"install_ghidra":                  true,
+		"install_analysis_provider":       true,
+		"configure_hopper":                true,
+		"capture_process_scenario":        true,
+		"analyze_javascript_application":  false,
+		"provider_status":                 false,
+		"validate_schema":                 false,
+		"list_artifacts":                  false,
 	} {
 		if got := RiskyToolName(name); got != want {
 			t.Errorf("RiskyToolName(%q) = %t, want %t", name, got, want)
@@ -47,18 +64,55 @@ func TestRiskyToolName(t *testing.T) {
 	}
 }
 
-func TestAutoReadOnlyToolName(t *testing.T) {
+func TestREAApprovalPolicy(t *testing.T) {
 	for name, want := range map[string]bool{
-		"inspect_binary":            true,
-		"analyze_javascript":        true,
-		"list_artifacts":            true,
-		"inspect_android_device":    false,
-		"observe_browser_scenario":  false,
-		"install_analysis_provider": false,
-		"provider_status":           false,
+		"analyze_javascript_application":  true,
+		"inspect_macho":                   true,
+		"list_strings":                    true,
+		"gdb_console":                     false,
+		"cutter_command":                  false,
+		"inspect_electron_page":           false,
+		"inspect_web_page":                false,
+		"list_electron_targets":           false,
+		"list_adb_devices":                false,
+		"list_frida_processes":            false,
+		"list_browser_targets":            false,
+		"list_javascript_runtime_targets": false,
+		"instrument_with_frida":           false,
+		"install_adb_package":             false,
+		"install_analysis_provider":       false,
+		"capture_process_scenario":        false,
+		"extract_artifact":                false,
+		"compare_process_captures":        false,
+		"trace_feature":                   false,
+		"unknown_future_tool":             false,
 	} {
 		if got := AutoReadOnlyToolName(name); got != want {
 			t.Errorf("AutoReadOnlyToolName(%q) = %t, want %t", name, got, want)
+		}
+	}
+}
+
+func TestREAAllowlistedToolsAreInPinnedCatalog(t *testing.T) {
+	file, err := os.Open(filepath.Join("testdata", "tools-6.5.0.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	catalog := make(map[string]bool)
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		name := strings.TrimSpace(scanner.Text())
+		if name != "" {
+			catalog[name] = true
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	for name := range staticTools {
+		if !catalog[name] {
+			t.Errorf("allowlisted tool %q is missing from the pinned catalog", name)
 		}
 	}
 }

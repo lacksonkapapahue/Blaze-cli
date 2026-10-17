@@ -350,7 +350,9 @@ type Policy struct {
 	Risky func(server, tool string) bool
 	// AskRisky is used for forced approvals and omits "Always allow".
 	AskRisky func(ctx context.Context, title, detail string) (bool, bool)
-	// AutoReadOnly lets a host exempt read-only tools from Auto-mode prompts.
+	// AutoReadOnly lets a host exempt explicitly trusted tools from Auto-mode
+	// prompts. A host that uses it must own the exact allowlist; do not infer
+	// this exemption from untrusted or incomplete server annotations.
 	AutoReadOnly func(server, tool string) bool
 }
 
@@ -381,7 +383,7 @@ func (m *Manager) Call(ctx context.Context, name, rawArgs string, p Policy) stri
 			return "Error in " + name + ": the arguments weren't a JSON object (" + err.Error() + "). Call it again with a JSON object."
 		}
 	}
-	autoReadOnly := r.tool.ReadOnly() && p.AutoReadOnly != nil && p.AutoReadOnly(c.srv.Name, r.tool.Name)
+	autoReadOnly := p.AutoReadOnly != nil && p.AutoReadOnly(c.srv.Name, r.tool.Name)
 	if forced || !autoReadOnly && !p.Autopilot && !m.allowed(c.srv, r.tool.Name) {
 		ask := p.Ask
 		detail := r.tool.Name + " on the MCP server " + r.server

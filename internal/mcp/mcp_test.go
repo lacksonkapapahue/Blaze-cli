@@ -379,7 +379,7 @@ func TestManager(t *testing.T) {
 	}
 }
 
-func TestGating(t *testing.T) {
+func TestREAAutoApprovalGating(t *testing.T) {
 	m := newTestManager(t)
 	ctx := context.Background()
 	asked := 0
@@ -442,6 +442,26 @@ func TestGating(t *testing.T) {
 	}
 	if r := m.Call(ctx, "mcp__fake__echo", `{"text":"static"}`, autoReadOnly); r != "echo: static" || autoReadOnlyPrompts != 0 {
 		t.Fatalf("read-only Auto exemption: %q prompts=%d", r, autoReadOnlyPrompts)
+	}
+	autoReadOnlyNoHint := Policy{
+		AutoReadOnly: func(server, tool string) bool { return server == "fake" && tool == "write.file" },
+		Ask: func(context.Context, string, string) (bool, bool) {
+			autoReadOnlyPrompts++
+			return false, false
+		},
+	}
+	if r := m.Call(ctx, "mcp__fake__write_file", `{}`, autoReadOnlyNoHint); r != "Error from fake (write.file): disk full" || autoReadOnlyPrompts != 0 {
+		t.Fatalf("allowlisted tool without readOnlyHint: %q prompts=%d", r, autoReadOnlyPrompts)
+	}
+	unknownPrompts := 0
+	if r := m.Call(ctx, "mcp__fake__write_file", `{}`, Policy{
+		AutoReadOnly: func(string, string) bool { return false },
+		Ask: func(context.Context, string, string) (bool, bool) {
+			unknownPrompts++
+			return false, false
+		},
+	}); !strings.HasPrefix(r, "Declined") || unknownPrompts != 1 {
+		t.Fatalf("unlisted tool didn't require approval: %q prompts=%d", r, unknownPrompts)
 	}
 	riskyCalls := 0
 	risky := func(server, tool string) bool { return server == "fake" && tool == "echo" }
