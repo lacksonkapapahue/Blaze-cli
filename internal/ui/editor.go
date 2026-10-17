@@ -501,7 +501,8 @@ func (e *Editor) tab() {
 // escape handles a key sequence starting with Esc. It reports a lone Esc pressed
 // twice quickly on an empty prompt.
 func (e *Editor) escape() (double bool) {
-	if In.Buffered() == 0 {
+	first, ok := readEscapeFirst()
+	if !ok {
 		e.menuOff = string(e.buf) // a lone Esc key closes the menu
 		if len(e.buf) == 0 {
 			if time.Since(e.lastEsc) < 800*time.Millisecond {
@@ -512,21 +513,13 @@ func (e *Editor) escape() (double bool) {
 		}
 		return false
 	}
-	r, _, _ := In.ReadRune()
-	switch r {
+	seq, skipped := skipTerminalReply(first, inputReadRune)
+	if skipped {
+		return false
+	}
+	switch first {
 	case '[', 'O':
-		seq := ""
-		for {
-			c, _, err := In.ReadRune()
-			if err != nil {
-				return
-			}
-			seq += string(c)
-			if c >= 0x40 && c <= 0x7e {
-				break
-			}
-		}
-		e.csi(r, seq)
+		e.csi(first, seq)
 	case 'b', 'B':
 		e.pos = e.wordLeft()
 	case 'f', 'F':
@@ -953,49 +946,123 @@ func rawKeys(fn func(key string) bool) bool {
 		return false
 	}
 	defer term.Restore(fd, old)
-	for {
+	return rawKeysRead(fn, func() (rune, error) {
 		r, _, err := In.ReadRune()
+		return r, err
+	}, In.Buffered, stdinR.waitInput)
+}
+
+func rawKeysRead(fn func(key string) bool, readRune func() (rune, error), buffered func() int, wait func(time.Duration) bool) bool {
+	for {
+		r, err := readRune()
 		if err != nil {
 			fn("ctrl-c")
 			return true
 		}
-		k := string(r)
+		k := rawKeyName(r)
 		switch r {
-		case '\r', '\n':
-			k = "enter"
-		case ' ':
-			k = "space"
-		case '\t':
-			k = "tab"
-		case 3, 4:
-			k = "ctrl-c"
-		case 16:
-			k = "up"
-		case 14:
-			k = "down"
 		case 27:
-			k = "esc"
-			if In.Buffered() > 0 {
-				n, _, _ := In.ReadRune()
-				if n == '[' || n == 'O' {
-					seq := ""
-					for {
-						c, _, err := In.ReadRune()
-						if err != nil {
-							break
-						}
-						seq += string(c)
-						if c >= 0x40 && c <= 0x7e {
-							break
-						}
-					}
-					k = map[string]string{"A": "up", "B": "down", "C": "right", "D": "left"}[seq]
-				}
+			var hasKey bool
+			k, hasKey = rawEscapeKey(buffered(), wait, readRune)
+			if !hasKey {
+				continue
 			}
 		}
 		if k != "" && fn(k) {
 			return true
 		}
+	}
+}
+
+func rawKeyName(r rune) string {
+	switch r {
+	case '\r', '\n':
+		return "enter"
+	case ' ':
+		return "space"
+	case '\t':
+		return "tab"
+	case 3, 4:
+		return "ctrl-c"
+	case 16:
+		return "up"
+	case 14:
+		return "down"
+	default:
+		return string(r)
+	}
+}
+
+func rawEscapeKey(buffered int, wait func(time.Duration) bool, readRune func() (rune, error)) (string, bool) {
+	first, ok := readEscapeFirstWith(buffered, wait, readRune)
+	if !ok {
+		return "esc", true
+	}
+	seq, skipped := skipTerminalReply(first, readRune)
+	if skipped {
+		return "", false
+	}
+	switch first {
+	case '[', 'O':
+		return map[string]string{"A": "up", "B": "down", "C": "right", "D": "left"}[seq], true
+	case 27:
+		return "esc", true
+	default:
+		return string(first), true
+	}
+}
+
+func readEscapeFirst() (rune, bool) {
+	return readEscapeFirstWith(In.Buffered(), stdinR.waitInput, func() (rune, error) {
+		r, _, err := In.ReadRune()
+		return r, err
+	})
+}
+
+func readEscapeFirstWith(buffered int, wait func(time.Duration) bool, readRune func() (rune, error)) (rune, bool) {
+	if buffered == 0 && !wait(50*time.Millisecond) {
+		return 0, false
+	}
+	r, err := readRune()
+	return r, err == nil
+}
+
+func inputReadRune() (rune, error) {
+	r, _, err := In.ReadRune()
+	return r, err
+}
+
+func skipTerminalReply(first rune, readRune func() (rune, error)) (string, bool) {
+	switch first {
+	case ']', 'P', '_', '^':
+		escaped := false
+		for {
+			r, err := readRune()
+			if err != nil {
+				return "", true
+			}
+			if r == 7 || escaped && r == '\\' {
+				return "", true
+			}
+			escaped = r == 27
+		}
+	case '[', 'O':
+		seq := ""
+		for {
+			r, err := readRune()
+			if err != nil {
+				return "", true
+			}
+			seq += string(r)
+			if r >= 0x40 && r <= 0x7e {
+				if first == '[' && (strings.HasPrefix(seq, "?") || strings.HasPrefix(seq, ">")) {
+					return "", true
+				}
+				return seq, false
+			}
+		}
+	default:
+		return string(first), false
 	}
 }
 

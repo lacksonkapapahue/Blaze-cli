@@ -126,6 +126,30 @@ func (r *stdinReader) Read(p []byte) (int, error) {
 	}
 }
 
+func (r *stdinReader) waitInput(timeout time.Duration) bool {
+	r.mu.Lock()
+	ready := len(r.left) > 0 || r.eof != nil
+	r.mu.Unlock()
+	if ready {
+		return true
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case c := <-r.data:
+		r.mu.Lock()
+		r.left = append(append([]byte(nil), c.b...), r.left...)
+		if c.err != nil {
+			r.eof = c.err
+		}
+		ready = len(c.b) > 0 || c.err != nil
+		r.mu.Unlock()
+		return ready
+	case <-timer.C:
+		return false
+	}
+}
+
 // Focused reports whether the terminal window has focus, as far as Blaze can tell.
 // Terminals that don't send focus reports always count as focused.
 func Focused() bool { return focused.Load() }

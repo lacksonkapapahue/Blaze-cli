@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.12.1 — Terminal input stability
+
+- Sign-in no longer cancels itself in Codespaces/SSH: late terminal replies are ignored, colour query skipped on remote terminals.
+
 ## v0.12.0 — Blaze Cloud sign-in, a new look, @ context and image paste
 
 - **Sign in, no API keys.** Blaze now needs a free Blaze account and nothing else. Signed out, `blaze` shows a

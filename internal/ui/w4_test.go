@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"bufio"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -137,6 +139,135 @@ func TestOSC11ReplyComplete(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := osc11ReplyComplete([]byte(tc.got)); got != tc.want {
 				t.Fatalf("osc11ReplyComplete() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRemoteTerminal(t *testing.T) {
+	keys := []string{"CODESPACES", "SSH_TTY", "SSH_CONNECTION", "TERM_PROGRAM"}
+	original := make(map[string]string)
+	exists := make(map[string]bool)
+	for _, key := range keys {
+		original[key], exists[key] = os.LookupEnv(key)
+		_ = os.Unsetenv(key)
+	}
+	defer func() {
+		for _, key := range keys {
+			if exists[key] {
+				_ = os.Setenv(key, original[key])
+			} else {
+				_ = os.Unsetenv(key)
+			}
+		}
+	}()
+	if remoteTerminal() {
+		t.Fatal("local terminal detected as remote")
+	}
+	for _, key := range keys[:3] {
+		_ = os.Setenv(key, "remote")
+		if !remoteTerminal() {
+			t.Errorf("%s did not identify a remote terminal", key)
+		}
+		_ = os.Unsetenv(key)
+	}
+	_ = os.Setenv("TERM_PROGRAM", "vscode")
+	if !remoteTerminal() {
+		t.Error("TERM_PROGRAM=vscode did not identify a remote terminal")
+	}
+	_ = os.Setenv("TERM_PROGRAM", "xterm")
+	if remoteTerminal() {
+		t.Error("TERM_PROGRAM=xterm identified a remote terminal")
+	}
+}
+
+func TestLateTerminalRepliesDoNotCancelChooser(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		reply string
+		split bool
+	}{
+		{"OSC", "]11;rgb:1e1e/1e1e/1e1e\x1b\\", false},
+		{"DA1", "[?1;2c", false},
+		{"split OSC", "]11;rgb:1e1e/1e1e/1e1e\x1b\\", true},
+		{"split DA1", "[?1;2c", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var source io.Reader = strings.NewReader("\x1b" + tc.reply + "\r")
+			if tc.split {
+				reader, writer := io.Pipe()
+				source = reader
+				go func() {
+					_, _ = writer.Write([]byte("\x1b"))
+					time.Sleep(20 * time.Millisecond)
+					_, _ = writer.Write([]byte(tc.reply + "\r"))
+					_ = writer.Close()
+				}()
+			}
+			in := bufio.NewReader(source)
+			readRune := func() (rune, error) {
+				r, _, err := in.ReadRune()
+				return r, err
+			}
+			waited := false
+			wait := func(timeout time.Duration) bool {
+				waited = true
+				if timeout != 50*time.Millisecond {
+					t.Errorf("escape continuation timeout = %s, want 50ms", timeout)
+				}
+				time.Sleep(20 * time.Millisecond)
+				return true
+			}
+			selected := -1
+			done := rawKeysRead(func(key string) bool {
+				if key == "esc" {
+					selected = -2
+					return true
+				}
+				if key == "enter" {
+					selected = 0
+					return true
+				}
+				return false
+			}, readRune, in.Buffered, wait)
+			if !done {
+				t.Fatal("chooser did not finish on Enter")
+			}
+			if tc.split && !waited {
+				t.Fatal("split ESC sequence did not wait for its continuation")
+			}
+			if selected != 0 {
+				t.Fatalf("selected option %d; want default option 0", selected)
+			}
+		})
+	}
+}
+
+func TestComposerSkipsTerminalReplies(t *testing.T) {
+	oldIn := In
+	defer func() { In = oldIn }()
+	for _, tc := range []struct {
+		name string
+		data string
+	}{
+		{"OSC", "]11;rgb:1e1e/1e1e/1e1e\x1b\\\r"},
+		{"DA1", "[?1;2c\r"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			In = bufio.NewReader(strings.NewReader(tc.data))
+			if _, err := In.Peek(1); err != nil {
+				t.Fatal(err)
+			}
+			e := &Editor{}
+			if e.escape() {
+				t.Fatal("terminal reply triggered double-Esc")
+			}
+			if len(e.buf) != 0 {
+				t.Fatalf("terminal reply inserted into composer: %q", string(e.buf))
+			}
+			next, _, err := In.ReadRune()
+			if err != nil || next != '\r' {
+				t.Fatalf("next input = %q, %v; want Enter", next, err)
 			}
 		})
 	}
