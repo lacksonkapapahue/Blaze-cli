@@ -265,6 +265,7 @@ func repl(a *agent.Agent, bg *bgAgents, in sysinfo.Info, cont bool) {
 		Boxed:       true,
 		OnShiftTab:  func() { cycleMode(a) },
 		DoubleEsc:   "/rewind",
+		RightRecord: true, // you on the right, Blaze on the left
 	}
 	ed.Glyph = func(line string) string {
 		switch {
@@ -414,7 +415,10 @@ func repl(a *agent.Agent, bg *bgAgents, in sysinfo.Info, cont bool) {
 		}
 		if q, ok := ui.NextQueued(); ok {
 			line = q
-			ui.Println("\n" + ui.Accent("›") + " " + ui.Ink(q) + ui.Weak("  · sent while Blaze worked"))
+			ui.Println("")
+			for _, l := range ui.UserLines(q, "sent while Blaze worked") {
+				ui.Println(l)
+			}
 		} else if bg.pending() {
 			wake()
 			continue

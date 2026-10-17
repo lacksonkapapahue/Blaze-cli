@@ -228,7 +228,7 @@ func (t *typeahead) send(line string) {
 	t.queue = append(t.queue, line)
 	t.mu.Unlock()
 	if spinners.Load() > 0 {
-		Above("  " + Accent("› ") + Ink(clip(line, termWidth()-20)) + Weak("  · runs when this step is done"))
+		Above(UserLines(line, "runs when this step is done")...)
 	}
 }
 

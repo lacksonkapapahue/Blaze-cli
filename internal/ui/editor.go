@@ -30,6 +30,7 @@ type Editor struct {
 	OnShiftTab  func()                     // cycle modes
 	Menu        func(line string) *MenuSet // pop-up menu above the box for this line (nil = none)
 	DoubleEsc   string                     // Esc twice on an empty prompt submits this ("/rewind"); "" = off
+	RightRecord bool                       // a sent line stays in the scrollback right-aligned, like a chat bubble (UserLines)
 
 	history []string
 	loaded  bool
@@ -182,7 +183,7 @@ func (e *Editor) key(r rune, err error) (string, bool, error) {
 			break // filled in from the menu; Enter again (or keep typing)
 		}
 		out := string(e.buf)
-		e.render(true)
+		e.record(out)
 		Printf("\r\n")
 		e.remember(out)
 		return out, true, nil
@@ -256,6 +257,18 @@ func (e *Editor) key(r rune, err error) (string, bool, error) {
 }
 
 // clear wipes the drawn prompt so something can print where it was.
+// record replaces the live input with what stays in the scrollback once a line
+// is sent: the right-aligned bubble for a chat prompt, else the plain "› text".
+func (e *Editor) record(out string) {
+	if !e.RightRecord || strings.TrimSpace(out) == "" {
+		e.render(true)
+		return
+	}
+	e.clear()
+	Printf("%s", strings.Join(UserLines(out, ""), "\r\n"))
+	e.curRow = 0
+}
+
 func (e *Editor) clear() {
 	if e.curRow > 0 {
 		Printf("\x1b[%dA", e.curRow)

@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.11.0 — You on the right, Blaze on the left
+
+- **Chat layout.** What you send now stays in the scrollback on the right, like a chat app, and Blaze's replies stay on
+  the left. Your message wraps to about 70% of the terminal, sits flush right with its text reading normally, and opens
+  with an accent `‹`. The same layout is used for a message sent while Blaze works and for one queued until the step
+  ends (with a dim "sent while Blaze worked" / "runs when this step is done" under it). Plain (`NO_COLOR`) or very
+  narrow terminals keep the old left-hand `› text` line. New `ui.UserLines` (`internal/ui/bubble.go`) with tests.
+
 ## v0.10.1 — Safety and stability fixes
 
 - **Shell safety in every mode.** The hard blocklist (wiping disks, the system or your home folder) now checks every

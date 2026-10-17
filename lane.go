@@ -113,7 +113,7 @@ func (l *lane) send(line string) bool {
 	if strings.HasPrefix(line, "/") || strings.HasPrefix(line, "!") || strings.HasPrefix(line, "#") {
 		return false
 	}
-	ui.Above("", "  "+ui.Accent("›")+" "+ui.Ink(line))
+	ui.Above(append([]string{""}, ui.UserLines(line, "")...)...)
 	l.mu.Lock()
 	l.busy++
 	l.mu.Unlock()
