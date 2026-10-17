@@ -33,6 +33,7 @@ func TestRiskyToolName(t *testing.T) {
 		"attach_to_process":        true,
 		"inspect_android_device":   true,
 		"run_process":              true,
+		"trace_native_calls":       true,
 		"install_ghidra":           true,
 		"open_ida_session":         true,
 		"analyze_javascript":       false,

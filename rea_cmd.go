@@ -158,6 +158,9 @@ func reaPromptShouldTrigger(prompt string) bool {
 		strings.Contains(q, "compare versions") || artifact {
 		return true
 	}
+	if strings.Contains(q, " how ") && strings.Contains(q, " works in ") {
+		return true
+	}
 	if strings.Contains(q, "how does ") && strings.Contains(q, " do ") {
 		return true
 	}

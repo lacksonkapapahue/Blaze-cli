@@ -68,8 +68,7 @@ func Check(home string) Status {
 	}
 	s.NpxPath, _ = exec.LookPath("npx")
 	if runtime.GOOS == "linux" {
-		_, err = exec.LookPath("ps")
-		s.Procps = err == nil
+		s.Procps = hasProcpsPS()
 	} else {
 		s.Procps = true
 	}
@@ -82,6 +81,17 @@ func Check(home string) Status {
 		}
 	}
 	return s
+}
+
+func hasProcpsPS() bool {
+	ps, err := exec.LookPath("ps")
+	if err != nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, ps, "--version").CombinedOutput()
+	return err == nil && strings.Contains(strings.ToLower(string(out)), "procps")
 }
 
 func (s Status) Ready() bool {
@@ -130,7 +140,7 @@ func commandExists(name string) bool {
 
 func RiskyToolName(name string) bool {
 	name = strings.ToLower(name)
-	terms := []string{"runtime", "process", "capture", "observe", "attach", "device", "adb", "browser", "launch", "run", "spawn", "execute", "shell", "record", "screenshot", "snapshot", "instrument", "hook", "debug", "install", "setup", "download", "hopper", "ghidra", "ida", "jadx"}
+	terms := []string{"runtime", "process", "capture", "observe", "attach", "device", "adb", "browser", "launch", "run", "spawn", "execute", "shell", "record", "screenshot", "snapshot", "instrument", "hook", "debug", "trace", "probe", "simulate", "emulate", "replay", "start", "stop", "terminate", "kill", "install", "setup", "download", "hopper", "ghidra", "ida", "jadx"}
 	for _, part := range strings.FieldsFunc(name, func(r rune) bool {
 		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9')
 	}) {

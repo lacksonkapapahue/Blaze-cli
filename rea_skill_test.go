@@ -90,18 +90,19 @@ func TestEmbeddedREASkillIsIndexedAndSeeds(t *testing.T) {
 
 func TestREASkillPromptTriggers(t *testing.T) {
 	for prompt, want := range map[string]bool{
-		"reverse engineer this app":                                true,
-		"decompile this binary":                                    true,
-		"how does Firefox do search?":                              true,
-		"inspect this binary file":                                 true,
-		"analyze this APK":                                         true,
-		"understand this Electron app":                             true,
-		"inspect this .NET assembly":                               true,
-		"extract code from this ASAR":                              true,
-		"analyze this firmware image":                              true,
-		"compare versions of this app":                             true,
-		"explain binary search in this ordinary source repository": false,
-		"review this ordinary source-code repository":              false,
+		"reverse engineer this app":    true,
+		"decompile this binary":        true,
+		"how does Firefox do search?":  true,
+		"inspect this binary file":     true,
+		"analyze this APK":             true,
+		"understand this Electron app": true,
+		"inspect this .NET assembly":   true,
+		"extract code from this ASAR":  true,
+		"analyze this firmware image":  true,
+		"compare versions of this app": true,
+		"Understand how search works in Firefox, show me the evidence, and build a similar feature": true,
+		"explain binary search in this ordinary source repository":                                  false,
+		"review this ordinary source-code repository":                                               false,
 	} {
 		if got := reaPromptShouldTrigger(prompt); got != want {
 			t.Errorf("reaPromptShouldTrigger(%q) = %t, want %t", prompt, got, want)
