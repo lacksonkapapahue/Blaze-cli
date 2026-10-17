@@ -122,6 +122,27 @@ func TestSplitRepliesKeepsKeys(t *testing.T) {
 	}
 }
 
+func TestQueryRepliesCompleteWaitsForBothTerminalReplies(t *testing.T) {
+	osc := "\x1b]11;rgb:ffff/ffff/ffff\x1b\\"
+	da1 := "\x1b[?1;2c"
+	for _, tc := range []struct {
+		name string
+		got  string
+		want bool
+	}{
+		{"OSC only", osc, false},
+		{"DA1 only", da1, false},
+		{"OSC then DA1", osc + da1, true},
+		{"DA1 then OSC", da1 + osc, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := queryRepliesComplete([]byte(tc.got)); got != tc.want {
+				t.Fatalf("queryRepliesComplete() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestTo256(t *testing.T) {
 	cases := map[[3]int]int{
 		{0, 0, 0}:       16,

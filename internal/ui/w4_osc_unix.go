@@ -71,8 +71,8 @@ func queryBackground() (light, ok bool) {
 		if err != nil || m <= 0 {
 			break
 		}
-		if s, _ := da1End(got); s >= 0 {
-			break // DA1 answered: everything before it has arrived
+		if queryRepliesComplete(got) {
+			break
 		}
 	}
 	light, ok, rest := splitReplies(got)
