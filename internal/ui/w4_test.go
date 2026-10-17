@@ -122,22 +122,21 @@ func TestSplitRepliesKeepsKeys(t *testing.T) {
 	}
 }
 
-func TestQueryRepliesCompleteWaitsForBothTerminalReplies(t *testing.T) {
+func TestOSC11ReplyComplete(t *testing.T) {
 	osc := "\x1b]11;rgb:ffff/ffff/ffff\x1b\\"
-	da1 := "\x1b[?1;2c"
 	for _, tc := range []struct {
 		name string
 		got  string
 		want bool
 	}{
-		{"OSC only", osc, false},
-		{"DA1 only", da1, false},
-		{"OSC then DA1", osc + da1, true},
-		{"DA1 then OSC", da1 + osc, true},
+		{"no reply", "", false},
+		{"incomplete OSC", "\x1b]11;rgb:ffff/ffff/ffff", false},
+		{"complete OSC", osc, true},
+		{"complete unsupported OSC", "\x1b]11;unsupported\x07", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := queryRepliesComplete([]byte(tc.got)); got != tc.want {
-				t.Fatalf("queryRepliesComplete() = %v, want %v", got, tc.want)
+			if got := osc11ReplyComplete([]byte(tc.got)); got != tc.want {
+				t.Fatalf("osc11ReplyComplete() = %v, want %v", got, tc.want)
 			}
 		})
 	}

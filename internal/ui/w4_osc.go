@@ -96,13 +96,9 @@ func da1End(b []byte) (start, end int) {
 	return -1, -1
 }
 
-func queryRepliesComplete(b []byte) bool {
-	_, _, _, s, e, _ := parseOSC11(b)
-	if s < 0 || e < 0 {
-		return false
-	}
-	s, _ = da1End(b)
-	return s >= 0
+func osc11ReplyComplete(b []byte) bool {
+	_, _, _, _, e, _ := parseOSC11(b)
+	return e > 0
 }
 
 // splitReplies takes what was read after the query and returns the background

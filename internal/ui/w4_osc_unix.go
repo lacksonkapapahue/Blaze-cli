@@ -32,7 +32,7 @@ func queryBackground() (light, ok bool) {
 	}
 	defer term.Restore(fd, old)
 
-	q := "\x1b]11;?\x1b\\\x1b[c"
+	q := "\x1b]11;?\x1b\\"
 	if _, err := os.Stdout.WriteString(q); err != nil {
 		return false, false
 	}
@@ -71,7 +71,7 @@ func queryBackground() (light, ok bool) {
 		if err != nil || m <= 0 {
 			break
 		}
-		if queryRepliesComplete(got) {
+		if osc11ReplyComplete(got) {
 			break
 		}
 	}
