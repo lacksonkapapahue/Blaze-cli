@@ -353,7 +353,7 @@ type Policy struct {
 	// AutoReadOnly lets a host exempt explicitly trusted tools from Auto-mode
 	// prompts. A host that uses it must own the exact allowlist; do not infer
 	// this exemption from untrusted or incomplete server annotations.
-	AutoReadOnly func(server, tool string) bool
+	AutoReadOnly func(server Server, tool string) bool
 }
 
 // PlanRefusal is the answer to a Plan-mode call of a tool that may change things.
@@ -383,7 +383,7 @@ func (m *Manager) Call(ctx context.Context, name, rawArgs string, p Policy) stri
 			return "Error in " + name + ": the arguments weren't a JSON object (" + err.Error() + "). Call it again with a JSON object."
 		}
 	}
-	autoReadOnly := p.AutoReadOnly != nil && p.AutoReadOnly(c.srv.Name, r.tool.Name)
+	autoReadOnly := p.AutoReadOnly != nil && p.AutoReadOnly(c.srv, r.tool.Name)
 	if forced || !autoReadOnly && !p.Autopilot && !m.allowed(c.srv, r.tool.Name) {
 		ask := p.Ask
 		detail := r.tool.Name + " on the MCP server " + r.server

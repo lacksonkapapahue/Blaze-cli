@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"bufio"
 	"strings"
 	"testing"
 )
@@ -28,6 +29,31 @@ func TestWrapText(t *testing.T) {
 			if strWidth(l) > c.n {
 				t.Errorf("wrapText(%q, %d): line %q is %d wide", c.in, c.n, l, strWidth(l))
 			}
+		}
+	}
+}
+
+func TestConfirmationBoxAt80Columns(t *testing.T) {
+	withColor(t)
+	detail := `"rea": {"command":"npx","args":["-y","rea-agents@6.5.0","mcp"]}` +
+		"\n\nnpx also installs REA's optional Frida dependency."
+	var sb strings.Builder
+	oldOut := Out
+	Out = bufio.NewWriter(&sb)
+	t.Cleanup(func() { Out = oldOut })
+
+	Box(AccentLabel("Connect REA MCP server?"), confirmLines(detail, 80))
+	rendered := stripped(sb.String())
+	wantJSON := `"rea": {"command":"npx","args":["-y","rea-agents@6.5.0","mcp"]}`
+	if !strings.Contains(rendered, wantJSON) {
+		t.Fatalf("confirmation box split or omitted JSON line:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "npx also installs REA's optional Frida dependency.") {
+		t.Fatalf("confirmation box split the Frida note:\n%s", rendered)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(rendered), "\n") {
+		if got := len([]rune(strings.TrimRight(line, "\r"))); got > 80 {
+			t.Errorf("confirmation row is %d columns at 80-column terminal: %q", got, line)
 		}
 	}
 }

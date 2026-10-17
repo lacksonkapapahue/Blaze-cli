@@ -140,6 +140,22 @@ func commandExists(name string) bool {
 
 func GlobalFile(home string) string { return mcp.GlobalFile(home) }
 
+// PinnedServerRegistered reports whether the global MCP config contains the
+// enabled REA entry with the exact pinned command.
+func PinnedServerRegistered(home string) (bool, error) {
+	servers, warnings := mcp.Load(home, "")
+	if len(warnings) > 0 {
+		return false, fmt.Errorf("couldn't read the global MCP config: %s", strings.Join(warnings, "; "))
+	}
+	for _, server := range servers {
+		if server.Name == ServerName && !server.Disabled && server.URL == "" &&
+			server.Command == "npx" && equalArgs(server.Args, []string{"-y", Package, "mcp"}) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // EnableFile adds the exact pinned server definition to a global MCP config.
 // Existing non-REA servers are preserved. An already-correct entry is a no-op.
 func EnableFile(file string) (backup string, changed bool, err error) {

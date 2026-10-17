@@ -150,8 +150,8 @@ func mcpPolicy(a *agent.Agent) mcp.Policy {
 		Risky: func(server, tool string) bool {
 			return strings.EqualFold(server, rea.ServerName) && rea.RiskyToolName(tool)
 		},
-		AutoReadOnly: func(server, tool string) bool {
-			return strings.EqualFold(server, rea.ServerName) && rea.AutoReadOnlyToolName(tool)
+		AutoReadOnly: func(server mcp.Server, tool string) bool {
+			return isPinnedGlobalREA(server) && rea.AutoReadOnlyToolName(tool)
 		},
 		Ask: func(ctx context.Context, title, detail string) (bool, bool) {
 			a.StopSpinner()
@@ -280,15 +280,33 @@ func cmdMCP(args []string, inChat bool) error {
 		return errors.New("unknown mcp command " + sub)
 	}
 	if changed && inChat {
-		var sp ui.Spinner
-		sp.Start("Restarting MCP servers")
-		m := getMCP()
-		m.Reload()
-		m.Wait(15 * time.Second)
-		sp.Stop()
-		mcpStatus(m, false)
+		reloadMCPInChat()
 	}
 	return nil
+}
+
+func reloadMCPInChat() {
+	var sp ui.Spinner
+	sp.Start("Restarting MCP servers")
+	m := getMCP()
+	m.Reload()
+	m.Wait(15 * time.Second)
+	sp.Stop()
+	mcpStatus(m, false)
+}
+
+func isPinnedGlobalREA(server mcp.Server) bool {
+	if !strings.EqualFold(server.Name, rea.ServerName) || server.Project || server.Command != "npx" ||
+		server.URL != "" || len(server.Args) != 3 ||
+		server.Args[0] != "-y" || server.Args[1] != rea.Package || server.Args[2] != "mcp" {
+		return false
+	}
+	source, err := filepath.Abs(server.Source)
+	if err != nil {
+		return false
+	}
+	global, err := filepath.Abs(mcp.GlobalFile(config.Dir()))
+	return err == nil && filepath.Clean(source) == filepath.Clean(global)
 }
 
 // parseMCPAdd reads `NAME [--project] [--env K=V]… -- CMD ARGS…` or

@@ -25,6 +25,14 @@ func cmdREA(args []string, inChat bool) error {
 		showREAStatus()
 		return nil
 	case "enable":
+		registered, err := rea.PinnedServerRegistered(config.Dir())
+		if err != nil {
+			return err
+		}
+		if registered {
+			ui.Step("REA is already connected.")
+			return nil
+		}
 		status := rea.Check(config.Dir())
 		if !status.Ready() {
 			showREAStatus()
@@ -87,11 +95,12 @@ func enableREA(inChat bool) error {
 		ui.Step("Backed up MCP config to " + backup)
 	}
 	if !changed {
-		ui.Step("REA is already registered with the pinned command.")
+		ui.Step("REA is already connected.")
+		return nil
 	}
 	if inChat {
-		getMCP().Reload()
-		ui.Step("REA MCP server reload started.")
+		reloadMCPInChat()
+		ui.Step("REA connected.")
 	} else {
 		ui.Step("REA added to the global MCP config. Restart Blaze to load it.")
 	}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -17,7 +18,9 @@ import (
 	"github.com/lacksonkapapahue/blaze-cli/internal/agent"
 	"github.com/lacksonkapapahue/blaze-cli/internal/config"
 	"github.com/lacksonkapapahue/blaze-cli/internal/mcp"
+	"github.com/lacksonkapapahue/blaze-cli/internal/rea"
 	"github.com/lacksonkapapahue/blaze-cli/internal/sysinfo"
+	"github.com/lacksonkapapahue/blaze-cli/internal/ui"
 )
 
 // fakeMCPServer is a Streamable HTTP MCP server with a read-only "lookup" and a
@@ -212,6 +215,7 @@ func TestMCPCommands(t *testing.T) {
 	if err := cmdMCP([]string{"add", "files", "--", "blaze-no-such-server", "/tmp"}, false); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := cmdMCP([]string{"add", "local", "--project", "--url", "http://127.0.0.1:1/mcp"}, false); err != nil {
 		t.Fatal(err)
 	}
@@ -230,5 +234,62 @@ func TestMCPCommands(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(mcp.GlobalFile(home)); !strings.Contains(string(b), `"disabled": true`) {
 		t.Fatalf("global file: %s", b)
+	}
+}
+
+func TestPinnedGlobalREAApprovalScope(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BLAZE_HOME", home)
+	server := mcp.Server{
+		Name:    "rea",
+		Command: "npx",
+		Args:    []string{"-y", rea.Package, "mcp"},
+		Source:  mcp.GlobalFile(home),
+	}
+	if !isPinnedGlobalREA(server) {
+		t.Fatal("exact global pinned REA entry wasn't recognized")
+	}
+	project := server
+	project.Project = true
+	project.Source = filepath.Join(t.TempDir(), ".mcp.json")
+	if isPinnedGlobalREA(project) {
+		t.Fatal("project REA entry received the global allowlist exemption")
+	}
+	custom := server
+	custom.Command = "other"
+	if isPinnedGlobalREA(custom) {
+		t.Fatal("custom global REA command received the allowlist exemption")
+	}
+	extraArgs := server
+	extraArgs.Args = append(append([]string(nil), server.Args...), "--extra")
+	if isPinnedGlobalREA(extraArgs) {
+		t.Fatal("custom global REA args received the allowlist exemption")
+	}
+}
+
+func TestREAEnableAlreadyPinnedIsSilentSuccessWithoutBackup(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BLAZE_HOME", home)
+	file := mcp.GlobalFile(home)
+	if err := mcp.Add(file, mcp.Server{Name: "rea", Command: "npx", Args: []string{"-y", rea.Package, "mcp"}}); err != nil {
+		t.Fatal(err)
+	}
+	var output strings.Builder
+	oldOut := ui.Out
+	ui.Out = bufio.NewWriter(&output)
+	t.Cleanup(func() { ui.Out = oldOut })
+
+	if err := cmdREA([]string{"enable"}, false); err != nil {
+		t.Fatal(err)
+	}
+	got := output.String()
+	if !strings.Contains(got, "REA is already connected.") ||
+		strings.Contains(got, "Connect REA MCP server?") ||
+		strings.Contains(got, "REA added") {
+		t.Fatalf("unexpected idempotent enable output: %q", got)
+	}
+	backups, err := filepath.Glob(file + ".bak-*")
+	if err != nil || len(backups) != 0 {
+		t.Fatalf("idempotent enable created backups %v: %v", backups, err)
 	}
 }

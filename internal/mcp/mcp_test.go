@@ -434,7 +434,7 @@ func TestREAAutoApprovalGating(t *testing.T) {
 	}
 	autoReadOnlyPrompts := 0
 	autoReadOnly := Policy{
-		AutoReadOnly: func(server, _ string) bool { return server == "fake" },
+		AutoReadOnly: func(server Server, _ string) bool { return server.Name == "fake" },
 		Ask: func(context.Context, string, string) (bool, bool) {
 			autoReadOnlyPrompts++
 			return false, false
@@ -444,7 +444,7 @@ func TestREAAutoApprovalGating(t *testing.T) {
 		t.Fatalf("read-only Auto exemption: %q prompts=%d", r, autoReadOnlyPrompts)
 	}
 	autoReadOnlyNoHint := Policy{
-		AutoReadOnly: func(server, tool string) bool { return server == "fake" && tool == "write.file" },
+		AutoReadOnly: func(server Server, tool string) bool { return server.Name == "fake" && tool == "write.file" },
 		Ask: func(context.Context, string, string) (bool, bool) {
 			autoReadOnlyPrompts++
 			return false, false
@@ -455,13 +455,50 @@ func TestREAAutoApprovalGating(t *testing.T) {
 	}
 	unknownPrompts := 0
 	if r := m.Call(ctx, "mcp__fake__write_file", `{}`, Policy{
-		AutoReadOnly: func(string, string) bool { return false },
+		AutoReadOnly: func(Server, string) bool { return false },
 		Ask: func(context.Context, string, string) (bool, bool) {
 			unknownPrompts++
 			return false, false
 		},
 	}); !strings.HasPrefix(r, "Declined") || unknownPrompts != 1 {
 		t.Fatalf("unlisted tool didn't require approval: %q prompts=%d", r, unknownPrompts)
+	}
+	for _, tc := range []struct {
+		name string
+		edit func(*Server)
+	}{
+		{name: "project rea", edit: func(s *Server) { s.Project = true; s.Source = "/tmp/project/.mcp.json" }},
+		{name: "global rea with a different command", edit: func(s *Server) { s.Project = false; s.Source = GlobalFile(m.Home); s.Command = "other" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m.mu.Lock()
+			server := m.conns["fake"].srv
+			original := server
+			server.Name = "rea"
+			server.Command = "npx"
+			server.Args = []string{"-y", "rea-agents@6.5.0", "mcp"}
+			server.Source = GlobalFile(m.Home)
+			tc.edit(&server)
+			m.conns["fake"].srv = server
+			m.mu.Unlock()
+			t.Cleanup(func() {
+				m.mu.Lock()
+				m.conns["fake"].srv = original
+				m.mu.Unlock()
+			})
+			asked := 0
+			policy := Policy{
+				AutoReadOnly: func(s Server, tool string) bool {
+					return !s.Project && s.Source == GlobalFile(m.Home) && s.Command == "npx" &&
+						len(s.Args) == 3 && s.Args[0] == "-y" && s.Args[1] == "rea-agents@6.5.0" &&
+						s.Args[2] == "mcp" && tool == "echo"
+				},
+				Ask: func(context.Context, string, string) (bool, bool) { asked++; return false, false },
+			}
+			if out := m.Call(ctx, "mcp__fake__echo", `{"text":"check"}`, policy); !strings.HasPrefix(out, "Declined") || asked != 1 {
+				t.Fatalf("server escaped approval: output=%q asks=%d server=%+v", out, asked, server)
+			}
+		})
 	}
 	riskyCalls := 0
 	risky := func(server, tool string) bool { return server == "fake" && tool == "echo" }

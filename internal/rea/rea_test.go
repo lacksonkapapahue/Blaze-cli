@@ -187,6 +187,29 @@ func TestEnableFileCreatesGlobalConfigWithoutExistingFile(t *testing.T) {
 	}
 }
 
+func TestPinnedServerRegisteredRequiresExactEnabledDefinition(t *testing.T) {
+	home := t.TempDir()
+	file := mcp.GlobalFile(home)
+	if err := mcp.Add(file, mcp.Server{Name: ServerName, Command: "other", Args: []string{"mcp"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := PinnedServerRegistered(home); err != nil || got {
+		t.Fatalf("custom command registered as pinned: got=%t err=%v", got, err)
+	}
+	if err := mcp.Add(file, mcp.Server{Name: ServerName, Command: "npx", Args: []string{"-y", Package, "mcp"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := PinnedServerRegistered(home); err != nil || !got {
+		t.Fatalf("pinned command not detected: got=%t err=%v", got, err)
+	}
+	if _, err := mcp.SetDisabled(file, ServerName, true); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := PinnedServerRegistered(home); err != nil || got {
+		t.Fatalf("disabled pinned command detected: got=%t err=%v", got, err)
+	}
+}
+
 func TestDisableFileReportsInvalidMCPConfig(t *testing.T) {
 	file := mcp.GlobalFile(t.TempDir())
 	if err := os.WriteFile(file, []byte("{"), 0o600); err != nil {
