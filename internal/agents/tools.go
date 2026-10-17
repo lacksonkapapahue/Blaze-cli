@@ -13,6 +13,12 @@ func tool(name, desc string, props map[string]any, required ...string) llm.Tool 
 	t.Type = "function"
 	t.Function.Name = name
 	t.Function.Description = desc
+	if required == nil {
+		required = []string{}
+	}
+	if props == nil {
+		props = map[string]any{}
+	}
 	t.Function.Parameters = map[string]any{"type": "object", "properties": props, "required": required}
 	return t
 }

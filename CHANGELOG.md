@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.12.2 — Remote OAuth sign-in
+
+- Sign in with Google/GitHub works in Codespaces and over SSH: paste the browser's final address back into Blaze.
+- Sign-in works on machines without a keychain (Codespaces, SSH, headless Linux): the session is kept in `~/.blaze/secrets.json`, readable only by you.
+- Chat works again: tools with no required arguments no longer send `required: null`, which Blaze Cloud and Gemini rejected.
+
 ## v0.12.1 — Terminal input stability
 
 - Sign-in no longer cancels itself in Codespaces/SSH: late terminal replies are ignored, colour query skipped on remote terminals.
