@@ -48,14 +48,43 @@ var gitReadOnly = map[string]bool{
 	"branch": true, "tag": true, "remote": true, "reflog": true, "stash": true, "config": true,
 }
 
-// planGit is "" when a git argument string only reads.
+// planGit is "" when a git argument string only reads. The string is split the way the
+// git tool splits it (no shell), so anything that would chain another command is refused.
 func planGit(raw string) string {
-	f := strings.Fields(raw)
-	for len(f) > 0 && (f[0] == "git" || strings.HasPrefix(f[0], "-C") || strings.HasPrefix(f[0], "--no-pager")) {
-		if f[0] == "-C" && len(f) > 1 {
-			f = f[1:]
-		}
+	argv, err := splitArgs(raw)
+	if err != nil {
+		return err.Error()
+	}
+	return planGitArgv(argv)
+}
+
+// planGlobal are the git options before the subcommand that Plan allows (-C takes a value).
+var planGlobal = map[string]bool{
+	"--no-pager": true, "--no-optional-locks": true, "--literal-pathspecs": true,
+	"--no-replace-objects": true, "--bare": true,
+}
+
+// planGitDanger are options that write a file or start a program, for any subcommand.
+// Long options are also refused abbreviated (git accepts unique prefixes).
+var planGitDanger = []string{
+	"--output", "--open-files-in-pager", "--exec", "--ext-diff", "--upload-pack",
+	"--receive-pack", "--edit", "--config-env",
+}
+
+// planGitArgv is planGit on an already split argument list.
+func planGitArgv(f []string) string {
+	if len(f) > 0 && f[0] == "git" {
 		f = f[1:]
+	}
+	for len(f) > 0 && strings.HasPrefix(f[0], "-") {
+		switch {
+		case f[0] == "-C" && len(f) > 1:
+			f = f[2:]
+		case planGlobal[f[0]]:
+			f = f[1:]
+		default:
+			return "git option " + f[0] + " isn't allowed while planning"
+		}
 	}
 	if len(f) == 0 {
 		return ""
@@ -63,6 +92,23 @@ func planGit(raw string) string {
 	sub, rest := f[0], f[1:]
 	if !gitReadOnly[sub] {
 		return "git " + sub + " changes the repository"
+	}
+	for _, a := range rest {
+		if a == "--" {
+			break // pathspecs follow
+		}
+		if strings.HasPrefix(a, "--") {
+			name, _, _ := strings.Cut(a, "=")
+			for _, d := range planGitDanger {
+				if len(name) >= 4 && strings.HasPrefix(d, name) {
+					return "git option " + a + " writes a file or starts a program"
+				}
+			}
+			continue
+		}
+		if strings.HasPrefix(a, "-O") || (sub == "grep" && strings.HasPrefix(a, "-") && strings.Contains(a, "O")) {
+			return "git option " + a + " starts a program"
+		}
 	}
 	has := func(xs ...string) bool {
 		for _, a := range rest {
@@ -82,15 +128,16 @@ func planGit(raw string) string {
 			}
 		}
 	case "tag":
+		if has("-d", "--delete", "-a", "--annotate", "-s", "--sign", "-u", "--local-user", "-f", "--force", "-m", "--message", "-F", "--file", "-e") {
+			return "git tag with those arguments changes tags"
+		}
 		for _, a := range rest {
-			if !strings.HasPrefix(a, "-") || has("-d", "--delete", "-a", "-s", "-f", "-m") {
-				if !has("-l", "--list") {
-					return "git tag with those arguments changes tags"
-				}
+			if !strings.HasPrefix(a, "-") && !has("-l", "--list") {
+				return "git tag with a name creates a tag"
 			}
 		}
 	case "remote":
-		if len(rest) > 0 && rest[0] != "-v" && rest[0] != "show" && rest[0] != "get-url" {
+		if len(rest) > 0 && rest[0] != "-v" && rest[0] != "--verbose" && rest[0] != "show" && rest[0] != "get-url" {
 			return "git remote " + rest[0] + " changes remotes"
 		}
 	case "reflog":
@@ -102,11 +149,17 @@ func planGit(raw string) string {
 			return "git stash changes the working tree"
 		}
 	case "config":
+		if has("--add", "--unset", "--unset-all", "--replace-all", "--rename-section", "--remove-section", "-e", "--edit") {
+			return "git config with those arguments changes settings"
+		}
+		if len(rest) > 0 && (rest[0] == "get" || rest[0] == "list") {
+			break
+		}
 		if !has("--get", "--get-all", "--list", "-l", "--get-regexp") {
 			return "git config without --get/--list changes settings"
 		}
 	}
-	if has("--output", "-o") && (sub == "diff" || sub == "log" || sub == "show") {
+	if has("-o") && (sub == "diff" || sub == "log" || sub == "show") {
 		return "writing git output to a file"
 	}
 	return ""
@@ -154,7 +207,7 @@ func catastrophicPath(p string) bool {
 			}
 		}
 	}
-	for _, d := range []string{"/etc", "/usr", "/bin", "/boot", "/var", "/System", "/Applications", `C:\Windows`, `C:\Program Files`} {
+	for _, d := range []string{"/etc", "/usr", "/bin", "/sbin", "/lib", "/lib64", "/boot", "/var", "/opt", "/root", "/home", "/Users", "/dev", "/sys", "/proc", "/private", "/System", "/Library", "/Applications", `C:\Windows`, `C:\Users`, `C:\Program Files`, `C:\Program Files (x86)`} {
 		if eqPath(c, filepath.Clean(d)) {
 			return true
 		}
@@ -171,8 +224,8 @@ func eqPath(a, b string) bool {
 
 // Catastrophic is the hard-blocklist reason for an action ("" = not on it).
 func Catastrophic(title, detail string) string {
-	if catastrophic.MatchString(detail) {
-		return "it could wipe a disk, the system or your home folder"
+	if why := blocked(detail); why != "" {
+		return why
 	}
 	if strings.HasPrefix(title, "Delete") && catastrophicPath(detail) {
 		return "it would delete a disk root, your home folder or a system folder"

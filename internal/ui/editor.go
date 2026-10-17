@@ -898,6 +898,9 @@ func rawKeys(fn func(key string) bool) bool {
 // Choose shows options inline ("  ? ▸ Yes   No") and returns the picked index.
 // ← → or Tab move, Enter picks, the first letter of an option picks it, Esc picks cancel.
 func Choose(prefix string, options []string, def, cancel int) int {
+	if len(options) == 0 {
+		return cancel
+	}
 	if !StdinTTY() || !IsTTY() {
 		ans, err := ReadLine(prefix + Weak("["+strings.Join(options, "/")+"] "))
 		if err != nil {
@@ -915,6 +918,9 @@ func Choose(prefix string, options []string, def, cancel int) int {
 		return cancel
 	}
 	sel := def
+	if sel < 0 || sel >= len(options) {
+		sel = 0
+	}
 	draw := func() {
 		var parts []string
 		for i, o := range options {
@@ -941,7 +947,7 @@ func Choose(prefix string, options []string, def, cancel int) int {
 			return true
 		default:
 			for i, o := range options {
-				if strings.EqualFold(k, o[:1]) {
+				if o != "" && strings.EqualFold(k, o[:1]) {
 					sel = i
 					return true
 				}
@@ -951,8 +957,18 @@ func Choose(prefix string, options []string, def, cancel int) int {
 		return false
 	})
 	// settle on the chosen answer only
-	Printf("\r\x1b[2K%s%s\r\n\x1b[?25h", prefix, Accent("■ ")+Ink(options[sel]))
+	Printf("\r\x1b[2K%s%s\r\n\x1b[?25h", prefix, chosenLabel(options, sel))
 	return sel
+}
+
+// chosenLabel is what Choose leaves on screen once it settles. A sel outside
+// options (Esc, Ctrl-C or EOF with cancel = -1) shows "cancelled" and never
+// indexes options.
+func chosenLabel(options []string, sel int) string {
+	if sel < 0 || sel >= len(options) {
+		return Weak("cancelled")
+	}
+	return Accent("■ ") + Ink(options[sel])
 }
 
 // Checklist lets the user tick rows with ↑ ↓ and Space, Enter to confirm.

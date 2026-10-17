@@ -181,7 +181,7 @@ func main() {
 	seedSkills() // bundled skill library (skills_cmd.go)
 	a := agent.New(cfg, &in, cwd, yolo)
 	defer a.Close()
-	startMCP() // servers connect in the background; their tools join when ready
+	startMCPSession(len(rest) == 0) // servers connect in the background; chat asks before trusting a folder's project servers
 	defer stopMCP()
 	if p := loadPrefs(); !yolo && !plan {
 		a.Env.Plan = p.WorkMode == "plan"

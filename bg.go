@@ -295,6 +295,16 @@ func (b *bgAgents) exec(ctx context.Context, ag *agents.Agent, name, args string
 	if b.plan(ag) && !(tools.PlanAllows(name) || getConns().ReadOnly(name) || getMCP().ReadOnly(name)) {
 		return agent.PlanRefusal
 	}
+	if b.plan(ag) && name == "git" {
+		// The same strict read-only check the main agent uses (tools.Run checks it again).
+		var g struct {
+			Args string `json:"args"`
+		}
+		_ = json.Unmarshal([]byte(args), &g)
+		if why := tools.PlanGit(g.Args); why != "" {
+			return "Plan mode is on: " + why + ", so it can't run yet. Use read-only git (status, diff, log, show) and finish with a plan."
+		}
+	}
 	if why := b.block(ag, name, args); why != "" {
 		return why
 	}

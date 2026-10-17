@@ -86,6 +86,47 @@ type APIError struct {
 
 func (e *APIError) Error() string { return e.Code }
 
+// authRefusals are the OAuth error codes that mean a refresh token or client
+// is definitively no good (as opposed to a passing outage).
+var authRefusals = map[string]bool{
+	"invalid_grant":       true,
+	"invalid_client":      true,
+	"unauthorized_client": true,
+	"unauthorized":        true,
+	"invalid_token":       true,
+}
+
+// AuthFailure reports whether the Worker definitively refused the credentials:
+// HTTP 401, or HTTP 400 with an OAuth refusal code (invalid_grant and kin).
+// Rate limits (429), server errors (5xx) and anything else are not.
+func (e *APIError) AuthFailure() bool {
+	if e == nil {
+		return false
+	}
+	switch e.Status {
+	case http.StatusUnauthorized:
+		return true
+	case http.StatusBadRequest:
+		return authRefusals[e.Code]
+	}
+	return false
+}
+
+// IsAuthFailure reports whether err is a definitive credential refusal from the
+// Worker (see APIError.AuthFailure). Network errors, cancellation, timeouts,
+// 429 and 5xx answers are all transient and report false.
+func IsAuthFailure(err error) bool {
+	if err == nil || errors.Is(err, ErrCancelled) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var un *Unreachable
+	if errors.As(err, &un) {
+		return false
+	}
+	var ae *APIError
+	return errors.As(err, &ae) && ae.AuthFailure()
+}
+
 // Unreachable wraps a network failure (offline, DNS, TLS).
 type Unreachable struct{ Err error }
 

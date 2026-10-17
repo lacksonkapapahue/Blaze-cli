@@ -133,7 +133,11 @@ func Run(e *Env, name, rawArgs string) (out string) {
 			out = fmt.Sprintf("Error in %s: %v\nFix: check the arguments and try again, or take a different approach.", name, r)
 		}
 	}()
-	if e.Plan && changes[name] && !(name == "git" && readOnlyGit(a.s("args"))) {
+	if e.Plan && name == "git" {
+		if why := planGit(a.s("args")); why != "" {
+			return "Plan mode is on: " + why + ", so it can't run yet. Use read-only git (status, diff, log, show) and finish with a plan."
+		}
+	} else if e.Plan && changes[name] {
 		return "Plan mode is on, so nothing can be changed yet. Keep investigating with file_read, file_list, file_search, web_search, then finish with a numbered plan. The user switches modes to let you act."
 	}
 	out = d.run(e, a)
@@ -192,18 +196,6 @@ func dataDir(sub string) string {
 }
 
 func isWindows() bool { return runtime.GOOS == "windows" }
-
-func readOnlyGit(args string) bool {
-	f := strings.Fields(args)
-	if len(f) == 0 {
-		return false
-	}
-	switch f[0] {
-	case "status", "log", "diff", "show", "branch", "remote", "blame", "ls-files", "rev-parse":
-		return len(f) == 1 || f[0] != "branch" || !strings.HasPrefix(f[1], "-d")
-	}
-	return false
-}
 
 func (e *Env) diff(path, before, after string) {
 	if e.OnDiff != nil && before != after {

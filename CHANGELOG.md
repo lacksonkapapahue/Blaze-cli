@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.10.1 — Safety and stability fixes
+
+- **Shell safety in every mode.** The hard blocklist (wiping disks, the system or your home folder) now checks every
+  shell command in every mode, not only when a narrow pattern matched, and catches dodges like `rm -r -f /`,
+  `rm -rf -- ~`, `"$HOME"`, `${HOME}`, `%USERPROFILE%`, `find ~ -delete`, `Remove-Item C:\ -Recurse`. Auto asks first for
+  recursive deletes of absolute/home/glob/variable targets, `wipefs`, `fdisk`, `parted`, `mkfs`, `dd of=`,
+  `Format-Volume`, `bcdedit`, `vssadmin delete`, `shred`. One check (`internal/tools/guard.go`) serves the main agent,
+  background agents and specialists. It is pattern matching, not a sandbox.
+- **`run_code` is checked** like `run_shell` (shell, PowerShell, Python and Node snippets).
+- **The `git` tool no longer goes through a shell.** Arguments are split and git runs directly, so
+  `status && rm -rf src` is refused. Plan mode allows only read-only git (no `-c`, `-O`, `--output`, `--exec`…), and
+  background agents and specialists share the same strict check. Risky git (`push --force`, `reset --hard`, `clean`,
+  `branch -D`…) asks first in Auto.
+- **Project MCP servers need your trust.** A folder's `.mcp.json` / `.blaze/mcp.json` servers no longer start until you
+  trust the folder (a y/N prompt in chat, or `blaze mcp trust`; `blaze mcp untrust` undoes it). Trust is tied to the
+  files' SHA-256, so any edit asks again. Untrusted files get no `${VAR}` expansion, a project server never replaces a
+  global one with the same name, and "Always allow" is keyed by source, name and command/URL. `mcp.json` and
+  `mcp-allow.json` are written atomically.
+- **Scheduling can't erase your crontab.** Only "no crontab for user" counts as empty; any other `crontab -l` error
+  stops without writing. Other lines are kept exactly, and a backup goes to `~/.blaze/crontab.bak`.
+- **Connections stay connected through hiccups.** Only a real refusal (401, or `invalid_grant` / `invalid_client` /
+  `unauthorized_client`) marks a connector Expired. 5xx, 429, timeouts, network errors and Esc no longer do. Key sync
+  signs you out only on a real 401, not when offline.
+- **Esc no longer crashes** the `/login` picker or a background agent's multiple-choice question.
+
 ## v0.10.0 — Blaze knows itself
 
 - **ABOUT YOU.** Every chat starts with a short, live block: you are Blaze CLI (version), made by Luke (Lackson Kapapa,

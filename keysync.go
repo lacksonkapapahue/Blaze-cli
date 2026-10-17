@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lacksonkapapahue/blaze-cli/internal/cloud"
 	"github.com/lacksonkapapahue/blaze-cli/internal/config"
 	"github.com/lacksonkapapahue/blaze-cli/internal/keystore"
 	"github.com/lacksonkapapahue/blaze-cli/internal/ui"
@@ -33,14 +34,23 @@ func syncKeys(timeout time.Duration) (*keystore.SyncResult, error) {
 	defer cancel()
 	r, err := config.Keys().Sync(ctx, ac.client.HC, ac.client.Base, tok)
 	if errors.Is(err, keystore.ErrSignedOut) {
-		if _, _, aerr := whoCheck(ac, tok); aerr != nil {
+		if _, _, aerr := whoCheck(ac, tok); sessionRefused(aerr) {
 			_ = ac.setSession(nil)
 		}
 	}
 	return r, err
 }
 
-// whoCheck confirms the session; an error means it was refused.
+// sessionRefused reports whether whoCheck's error means the service really
+// refused the session (HTTP 401). Offline, DNS, timeouts, 429 and 5xx leave
+// the session in place: clearing it would sign out both CLI and Desktop.
+func sessionRefused(err error) bool {
+	var ae *cloud.APIError
+	return errors.As(err, &ae) && ae.Status == 401
+}
+
+// whoCheck confirms the session. Use sessionRefused to tell a refusal from a
+// passing failure.
 func whoCheck(ac *account, tok string) (string, bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

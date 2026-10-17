@@ -126,6 +126,39 @@ func (s *Shell) Run(cmd string, timeout time.Duration) string {
 	return strings.TrimRight(res, "\n")
 }
 
+// RunArgv starts a program directly (no shell) in the current folder with a timeout and
+// returns "exit N · cwd X" plus the output, like Run.
+func (s *Shell) RunArgv(timeout time.Duration, name string, argv ...string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	c := exec.CommandContext(ctx, name, argv...)
+	c.Dir = s.Cwd()
+	c.Stdin = nil
+	c.Env = append(os.Environ(), "BLAZE=1", "GIT_TERMINAL_PROMPT=0", "PAGER=cat", "GIT_PAGER=cat", "DEBIAN_FRONTEND=noninteractive")
+	var buf bytes.Buffer
+	c.Stdout = &buf
+	c.Stderr = &buf
+	err := c.Run()
+	out := strings.TrimRight(buf.String(), "\r\n ")
+	if ctx.Err() == context.DeadlineExceeded {
+		return fmt.Sprintf("exit 124 · timed out after %s\n%s", timeout, tail(out, 6000))
+	}
+	if err != nil && c.ProcessState == nil {
+		return "Error: couldn't start " + name + ": " + err.Error()
+	}
+	code := c.ProcessState.ExitCode()
+	res := fmt.Sprintf("exit %d · cwd %s\n%s", code, s.Cwd(), tail(out, 12000))
+	if code != 0 {
+		for _, h := range hints {
+			if h.re.MatchString(out) {
+				res += "\n[hint: " + h.hint + "]"
+				break
+			}
+		}
+	}
+	return strings.TrimRight(res, "\n")
+}
+
 func tail(s string, n int) string {
 	if len(s) <= n {
 		return s
@@ -134,8 +167,6 @@ func tail(s string, n int) string {
 }
 
 var danger = regexp.MustCompile(`(?i)(\brm\s+-[a-z]*r[a-z]*f?\s+(/|~|\*|\$HOME|\.\s*$)|\bmkfs|\bdd\s+if=|\bshutdown\b|\breboot\b|\bformat\s+[a-z]:|Remove-Item.+-Recurse.+([A-Z]:\\|~|\$HOME|\*)|\breg\s+(delete|add)\b|Set-ExecutionPolicy|\bdiskpart\b|\bchmod\s+-R\s+777\s+/|:\(\)\s*\{|>\s*/dev/sd|\bsudo\b|\bgit\s+push\s+.*--force|\bgit\s+reset\s+--hard|\bgit\s+clean\s+-[a-z]*f)`)
-
-func risky(cmd string) bool { return danger.MatchString(cmd) }
 
 // ---------- background jobs ----------
 
@@ -244,8 +275,8 @@ func init() {
 			if cmd == "" {
 				return "Error: empty command."
 			}
-			if risky(cmd) && !e.ask("Run a risky command?", cmd) {
-				return "The user did NOT approve this command. Don't run it; suggest a safer way or ask them."
+			if why := e.check("Run a risky command?", cmd, risky(cmd), "The user did NOT approve this command. Don't run it; suggest a safer way or ask them."); why != "" {
+				return why
 			}
 			if a.b("background") {
 				j, err := e.Jobs.Start(e.Shell, cmd)
@@ -307,6 +338,9 @@ func init() {
 			j := e.Jobs.Get(a.i("id", 0))
 			if j == nil || j.done {
 				return "That job isn't running."
+			}
+			if why := blocked(a.s("text")); why != "" {
+				return refusal(why)
 			}
 			if _, err := io.WriteString(j.stdin, a.s("text")+"\n"); err != nil {
 				return "Error: " + err.Error()

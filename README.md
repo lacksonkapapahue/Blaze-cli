@@ -36,6 +36,7 @@ blaze mcp list                 MCP servers: do they start, how many tools
 blaze mcp add NAME -- CMD ARGS…           add a local (stdio) MCP server (--env K=V before --)
 blaze mcp add NAME --url URL [--header K=V]   add a remote (Streamable HTTP) MCP server
 blaze mcp remove NAME · blaze mcp enable|disable NAME
+blaze mcp trust · blaze mcp untrust   allow (or stop) this folder's .mcp.json / .blaze/mcp.json servers
 blaze skills [NAME]            skill library: list, show one, or on|off|delete|restore NAME
 blaze learn [on|off]           learn memories and skills automatically (shared with Desktop)
 ```

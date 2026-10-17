@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -23,6 +24,7 @@ const (
 	Connected = "connected"
 	Failed    = "failed"
 	Disabled  = "disabled"
+	Untrusted = "untrusted" // a project server in a folder the user hasn't trusted: not started
 )
 
 // Prefix starts every MCP tool name the model sees.
@@ -98,8 +100,12 @@ func (m *Manager) Start() {
 	m.order = nil
 	for _, s := range servers {
 		c := &conn{srv: s, status: Starting, ready: make(chan struct{})}
-		if s.Disabled {
+		switch {
+		case s.Disabled:
 			c.status = Disabled
+			close(c.ready)
+		case !s.MayStart():
+			c.status = Untrusted
 			close(c.ready)
 		}
 		m.conns[s.Name] = c
@@ -368,7 +374,7 @@ func (m *Manager) Call(ctx context.Context, name, rawArgs string, p Policy) stri
 			return "Error in " + name + ": the arguments weren't a JSON object (" + err.Error() + "). Call it again with a JSON object."
 		}
 	}
-	if !p.Autopilot && !m.Allowed(r.server, r.tool.Name) {
+	if !p.Autopilot && !m.allowed(c.srv, r.tool.Name) {
 		if p.Ask == nil {
 			return "Declined: nobody is here to approve the MCP tool " + r.tool.Name + " on " + r.server + "."
 		}
@@ -381,7 +387,7 @@ func (m *Manager) Call(ctx context.Context, name, rawArgs string, p Policy) stri
 			return "Declined: the user did not approve " + r.tool.Name + " on " + r.server + ". Don't retry it; ask or take another approach."
 		}
 		if always {
-			if err := m.Allow(r.server, r.tool.Name); err != nil {
+			if err := m.allow(c.srv, r.tool.Name); err != nil {
 				m.log("couldn't save the MCP approval: " + err.Error())
 			}
 		}
@@ -475,7 +481,9 @@ func safe(s string) string {
 
 // ---------------- "Always allow" ----------------
 
-// allowFile keeps the approvals: "server" (every tool) or "server/tool".
+// allowFile keeps the approvals: "<key>" (every tool) or "<key>/<tool>", where
+// key is ApprovalKey (source + name + what it runs). Old name-only entries
+// ("server", "server/tool") still count, but only for global servers.
 func (m *Manager) allowFile() string { return filepath.Join(m.Home, "mcp-allow.json") }
 
 type allowDoc struct {
@@ -490,23 +498,52 @@ func (m *Manager) readAllow() allowDoc {
 	return d
 }
 
-// Allowed is true when the user chose "Always allow" for this tool or server.
+func (m *Manager) server(name string) (Server, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	c, ok := m.conns[name]
+	if !ok {
+		return Server{}, false
+	}
+	return c.srv, true
+}
+
+// Allowed is true when the user chose "Always allow" for this tool or server
+// (one of this session's servers, by name).
 func (m *Manager) Allowed(server, tool string) bool {
+	s, ok := m.server(server)
+	return ok && m.allowed(s, tool)
+}
+
+func (m *Manager) allowed(s Server, tool string) bool {
 	m.allowMu.Lock()
 	defer m.allowMu.Unlock()
+	key := ApprovalKey(s)
 	for _, a := range m.readAllow().Allow {
-		if a == server || a == server+"/"+tool || a == server+"/*" {
+		if a == key || a == key+"/"+tool || a == key+"/*" {
 			return true
+		}
+		if !s.Project && (a == s.Name || a == s.Name+"/"+tool || a == s.Name+"/*") {
+			return true // approvals saved before keys had a source
 		}
 	}
 	return false
 }
 
-// Allow remembers "Always allow" for one tool ("" tool = the whole server).
+// Allow remembers "Always allow" for one tool ("" tool = the whole server) of
+// one of this session's servers.
 func (m *Manager) Allow(server, tool string) error {
+	s, ok := m.server(server)
+	if !ok {
+		return errors.New("no MCP server called " + server + " in this session")
+	}
+	return m.allow(s, tool)
+}
+
+func (m *Manager) allow(s Server, tool string) error {
 	m.allowMu.Lock()
 	defer m.allowMu.Unlock()
-	key := server
+	key := ApprovalKey(s)
 	if tool != "" {
 		key += "/" + tool
 	}
@@ -521,14 +558,26 @@ func (m *Manager) Allow(server, tool string) error {
 	return m.writeAllow(d)
 }
 
-// Forget drops every remembered approval for a server.
+// allowKeyRe splits a saved approval: scope, server name, hash, optional tool.
+var allowKeyRe = regexp.MustCompile(`^(global|project:.+):([A-Za-z0-9][A-Za-z0-9_-]*)#[0-9a-f]{16}(/.*)?$`)
+
+// allowName is the server name an approval entry is for.
+func allowName(a string) string {
+	if mm := allowKeyRe.FindStringSubmatch(a); mm != nil {
+		return mm[2]
+	}
+	n, _, _ := strings.Cut(a, "/")
+	return n
+}
+
+// Forget drops every remembered approval for a server name (any source).
 func (m *Manager) Forget(server string) error {
 	m.allowMu.Lock()
 	defer m.allowMu.Unlock()
 	d := m.readAllow()
 	var keep []string
 	for _, a := range d.Allow {
-		if a != server && !strings.HasPrefix(a, server+"/") {
+		if allowName(a) != server {
 			keep = append(keep, a)
 		}
 	}
@@ -544,8 +593,5 @@ func (m *Manager) writeAllow(d allowDoc) error {
 		d.Allow = []string{}
 	}
 	b, _ := json.MarshalIndent(d, "", "  ")
-	if err := os.MkdirAll(m.Home, 0o700); err != nil {
-		return err
-	}
-	return os.WriteFile(m.allowFile(), append(b, '\n'), 0o600)
+	return writeFileAtomic(m.allowFile(), append(b, '\n'), 0o600)
 }
