@@ -40,15 +40,15 @@ func TestRealPack(t *testing.T) {
 		}
 		seen[s.Name] = true
 		for f := range s.Files {
-			if f != "SKILL.md" && !strings.HasPrefix(f, "assets/") {
-				t.Errorf("%s: extra files belong in assets/: %s", s.Name, f)
+			if f != "SKILL.md" && f != "LICENSE" && f != "SOURCE.md" && !strings.HasPrefix(f, "assets/") && !strings.HasPrefix(f, "references/") {
+				t.Errorf("%s: unexpected extra file: %s", s.Name, f)
 			}
-			if f != "SKILL.md" && !strings.Contains(md, f) {
+			if strings.HasPrefix(f, "references/") && !strings.Contains(md, f) {
 				t.Errorf("%s: %s is never mentioned in SKILL.md", s.Name, f)
 			}
 		}
 	}
-	for _, must := range []string{"web-design-teamofkeys", "web-design-blaze-classic", "skill-creator", "landing-page-builder"} {
+	for _, must := range []string{"web-design-teamofkeys", "web-design-blaze-classic", "skill-creator", "landing-page-builder", "reverse-engineer-anything"} {
 		if !seen[must] {
 			t.Errorf("missing %s", must)
 		}

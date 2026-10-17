@@ -19,6 +19,7 @@ import (
 	"github.com/lacksonkapapahue/blaze-cli/internal/agent"
 	"github.com/lacksonkapapahue/blaze-cli/internal/config"
 	"github.com/lacksonkapapahue/blaze-cli/internal/mcp"
+	"github.com/lacksonkapapahue/blaze-cli/internal/rea"
 	"github.com/lacksonkapapahue/blaze-cli/internal/ui"
 )
 
@@ -140,14 +141,25 @@ func stopMCP() {
 
 // mcpPolicy is how the agent's MCP calls are gated: Plan refuses tools that
 // aren't read-only, Auto asks with the usual approval prompt (with "Always
-// allow"), Autopilot runs them.
+// allow"), except REA tools explicitly allowlisted as static. Risky REA tools
+// always ask, including in Autopilot.
 func mcpPolicy(a *agent.Agent) mcp.Policy {
 	return mcp.Policy{
 		Plan:      a.Env.Plan,
 		Autopilot: a.Autopilot(),
+		Risky: func(server, tool string) bool {
+			return strings.EqualFold(server, rea.ServerName) && rea.RiskyToolName(tool)
+		},
+		AutoReadOnly: func(server mcp.Server, tool string) bool {
+			return isPinnedGlobalREA(server) && rea.AutoReadOnlyToolName(tool)
+		},
 		Ask: func(ctx context.Context, title, detail string) (bool, bool) {
 			a.StopSpinner()
 			return confirmHook(ctx, title, detail, true)
+		},
+		AskRisky: func(ctx context.Context, title, detail string) (bool, bool) {
+			a.StopSpinner()
+			return confirmHook(ctx, title, detail, false)
 		},
 	}
 }
@@ -268,15 +280,33 @@ func cmdMCP(args []string, inChat bool) error {
 		return errors.New("unknown mcp command " + sub)
 	}
 	if changed && inChat {
-		var sp ui.Spinner
-		sp.Start("Restarting MCP servers")
-		m := getMCP()
-		m.Reload()
-		m.Wait(15 * time.Second)
-		sp.Stop()
-		mcpStatus(m, false)
+		reloadMCPInChat()
 	}
 	return nil
+}
+
+func reloadMCPInChat() {
+	var sp ui.Spinner
+	sp.Start("Restarting MCP servers")
+	m := getMCP()
+	m.Reload()
+	m.Wait(15 * time.Second)
+	sp.Stop()
+	mcpStatus(m, false)
+}
+
+func isPinnedGlobalREA(server mcp.Server) bool {
+	if !strings.EqualFold(server.Name, rea.ServerName) || server.Project || server.Command != "npx" ||
+		server.URL != "" || len(server.Args) != 3 ||
+		server.Args[0] != "-y" || server.Args[1] != rea.Package || server.Args[2] != "mcp" {
+		return false
+	}
+	source, err := filepath.Abs(server.Source)
+	if err != nil {
+		return false
+	}
+	global, err := filepath.Abs(mcp.GlobalFile(config.Dir()))
+	return err == nil && filepath.Clean(source) == filepath.Clean(global)
 }
 
 // parseMCPAdd reads `NAME [--project] [--env K=V]… -- CMD ARGS…` or
@@ -452,10 +482,28 @@ func mcpDoctor(add func(name string, ok bool, detail string)) {
 	m.Start()
 	defer m.Close()
 	m.Wait(mcp.InitTimeout + 5*time.Second)
+	reaStatus := rea.Check(config.Dir())
+	reaSeen := false
 	for _, w := range m.Warnings() {
 		add("MCP config", false, w)
 	}
 	for _, st := range m.States() {
+		if strings.EqualFold(st.Server.Name, rea.ServerName) {
+			reaSeen = true
+			switch {
+			case !reaStatus.NodeSupported:
+				detail := "Node too old"
+				if !reaStatus.NodeFound {
+					detail = "Node missing"
+				}
+				add("REA", false, detail+" · needs 22.19+, 24.11+ or 26+")
+			case st.Status == mcp.Connected && len(st.Tools) > 0:
+				add("REA", true, fmt.Sprintf("connected · %d tools", len(st.Tools)))
+			default:
+				add("REA", false, "not connected · run `blaze rea status`")
+			}
+			continue
+		}
 		name := "MCP " + st.Server.Name
 		switch st.Status {
 		case mcp.Connected:
@@ -468,6 +516,17 @@ func mcpDoctor(add func(name string, ok bool, detail string)) {
 			add(name, false, "didn't finish starting in time")
 		default:
 			add(name, false, st.Err)
+		}
+	}
+	if !reaSeen {
+		if !reaStatus.NodeSupported {
+			detail := "Node too old"
+			if !reaStatus.NodeFound {
+				detail = "Node missing"
+			}
+			add("REA", false, detail+" · needs 22.19+, 24.11+ or 26+")
+		} else {
+			add("REA", false, "not connected · run `blaze rea enable`")
 		}
 	}
 }

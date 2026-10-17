@@ -23,6 +23,21 @@ Then run `blaze`. The first time, it asks you to sign in to Blaze (email, Google
 account; free) and goes straight into the chat. That's all: Blaze Cloud picks a strong model for each task,
 so you never need API keys of your own.
 
+## Reverse engineering with REA
+
+Blaze bundles the [Reverse Engineer Anything (REA)](https://github.com/morluto/rea) skill for evidence-led
+analysis of shipped software such as APKs, Electron apps, .NET assemblies, binaries, ASAR files and firmware.
+It skips ordinary source-code repositories. To connect REA's MCP tools, run `blaze rea status` to check
+prerequisites, then `blaze rea enable`; Blaze shows the exact global configuration change and asks before
+writing it. This registers the pinned `rea-agents@6.5.0` package. Node.js 22.19+, 24.11+ or 26+ is required.
+The skill can use a pinned JavaScript CLI fallback when MCP is unavailable.
+
+Example prompt: **"Understand how search works in <app>, show me the evidence, and build a similar feature for my project."**
+
+Only analyse software you own or are authorised to examine. REA is credited to
+[morluto/rea](https://github.com/morluto/rea) and is distributed under its MIT license.
+`blaze rea disable` removes its entry from the global MCP config.
+
 ## Use
 
 ```
@@ -39,6 +54,7 @@ blaze whoami · blaze logout    who's signed in and which model answers · sign 
 blaze connect [app] [--manual] list connectors, or connect google / github / notion / slack / spotify
 blaze disconnect APP
 blaze mcp list                 MCP servers: do they start, how many tools
+blaze rea status|enable|disable  check prerequisites, connect or disconnect REA
 blaze mcp add NAME -- CMD ARGS…           add a local (stdio) MCP server (--env K=V before --)
 blaze mcp add NAME --url URL [--header K=V]   add a remote (Streamable HTTP) MCP server
 blaze mcp remove NAME · blaze mcp enable|disable NAME
@@ -66,6 +82,7 @@ another word, so picking one opens the next menu. The same menus work in the box
 | `/model` | `blaze-auto` and the per-task Blaze models, then your own chain, then `auto` |
 | `/skills` | your skills (picking one starts a message that uses it) · `list` · `on` · `off` · `delete` · `restore`, then the skills each applies to |
 | `/mcp` | `list` · `reload` · `add` · `remove` · `enable` · `disable`, then your servers' names |
+| `/rea` | `status` · `enable` · `disable` |
 | `/agents` | `list` · `new` · `msg` · `cancel` · `resume` · `discard` · `apply` · `reject` · `cap`, then this chat's agents (specialists for apply/reject, 1-6 for cap) |
 | `/update` | `--force` (reinstall the newest build) |
 | `@` | the folder's folders and files; picking a folder lists what's inside it |

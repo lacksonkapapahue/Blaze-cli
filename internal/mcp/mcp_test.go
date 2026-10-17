@@ -379,7 +379,7 @@ func TestManager(t *testing.T) {
 	}
 }
 
-func TestGating(t *testing.T) {
+func TestREAAutoApprovalGating(t *testing.T) {
 	m := newTestManager(t)
 	ctx := context.Background()
 	asked := 0
@@ -431,6 +431,94 @@ func TestGating(t *testing.T) {
 	}
 	if err := m.Forget("fake"); err != nil || m.Allowed("fake", "echo") {
 		t.Fatal("forget")
+	}
+	autoReadOnlyPrompts := 0
+	autoReadOnly := Policy{
+		AutoReadOnly: func(server Server, _ string) bool { return server.Name == "fake" },
+		Ask: func(context.Context, string, string) (bool, bool) {
+			autoReadOnlyPrompts++
+			return false, false
+		},
+	}
+	if r := m.Call(ctx, "mcp__fake__echo", `{"text":"static"}`, autoReadOnly); r != "echo: static" || autoReadOnlyPrompts != 0 {
+		t.Fatalf("read-only Auto exemption: %q prompts=%d", r, autoReadOnlyPrompts)
+	}
+	autoReadOnlyNoHint := Policy{
+		AutoReadOnly: func(server Server, tool string) bool { return server.Name == "fake" && tool == "write.file" },
+		Ask: func(context.Context, string, string) (bool, bool) {
+			autoReadOnlyPrompts++
+			return false, false
+		},
+	}
+	if r := m.Call(ctx, "mcp__fake__write_file", `{}`, autoReadOnlyNoHint); r != "Error from fake (write.file): disk full" || autoReadOnlyPrompts != 0 {
+		t.Fatalf("allowlisted tool without readOnlyHint: %q prompts=%d", r, autoReadOnlyPrompts)
+	}
+	unknownPrompts := 0
+	if r := m.Call(ctx, "mcp__fake__write_file", `{}`, Policy{
+		AutoReadOnly: func(Server, string) bool { return false },
+		Ask: func(context.Context, string, string) (bool, bool) {
+			unknownPrompts++
+			return false, false
+		},
+	}); !strings.HasPrefix(r, "Declined") || unknownPrompts != 1 {
+		t.Fatalf("unlisted tool didn't require approval: %q prompts=%d", r, unknownPrompts)
+	}
+	for _, tc := range []struct {
+		name string
+		edit func(*Server)
+	}{
+		{name: "project rea", edit: func(s *Server) { s.Project = true; s.Source = "/tmp/project/.mcp.json" }},
+		{name: "global rea with a different command", edit: func(s *Server) { s.Project = false; s.Source = GlobalFile(m.Home); s.Command = "other" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m.mu.Lock()
+			server := m.conns["fake"].srv
+			original := server
+			server.Name = "rea"
+			server.Command = "npx"
+			server.Args = []string{"-y", "rea-agents@6.5.0", "mcp"}
+			server.Source = GlobalFile(m.Home)
+			tc.edit(&server)
+			m.conns["fake"].srv = server
+			m.mu.Unlock()
+			t.Cleanup(func() {
+				m.mu.Lock()
+				m.conns["fake"].srv = original
+				m.mu.Unlock()
+			})
+			asked := 0
+			policy := Policy{
+				AutoReadOnly: func(s Server, tool string) bool {
+					return !s.Project && s.Source == GlobalFile(m.Home) && s.Command == "npx" &&
+						len(s.Args) == 3 && s.Args[0] == "-y" && s.Args[1] == "rea-agents@6.5.0" &&
+						s.Args[2] == "mcp" && tool == "echo"
+				},
+				Ask: func(context.Context, string, string) (bool, bool) { asked++; return false, false },
+			}
+			if out := m.Call(ctx, "mcp__fake__echo", `{"text":"check"}`, policy); !strings.HasPrefix(out, "Declined") || asked != 1 {
+				t.Fatalf("server escaped approval: output=%q asks=%d server=%+v", out, asked, server)
+			}
+		})
+	}
+	riskyCalls := 0
+	risky := func(server, tool string) bool { return server == "fake" && tool == "echo" }
+	askRisky := func(_ context.Context, title, detail string) (bool, bool) {
+		riskyCalls++
+		if title != "Use fake?" || !strings.Contains(detail, "REA tool: echo") || !strings.Contains(detail, "Target: /tmp/rea-target") {
+			t.Errorf("risky prompt: %q %q", title, detail)
+		}
+		return true, true
+	}
+	riskPolicy := Policy{Plan: true, Autopilot: true, Risky: risky, AskRisky: askRisky}
+	if r := m.Call(ctx, "mcp__fake__echo", `{"text":"target","targetPath":"/tmp/rea-target"}`, riskPolicy); r != PlanRefusal || riskyCalls != 0 {
+		t.Fatalf("Plan allowed risky tool: %q, prompts=%d", r, riskyCalls)
+	}
+	riskPolicy.Plan = false
+	if r := m.Call(ctx, "mcp__fake__echo", `{"text":"target","targetPath":"/tmp/rea-target"}`, riskPolicy); r != "echo: target" || riskyCalls != 1 {
+		t.Fatalf("Autopilot did not ask before risky tool: %q, prompts=%d", r, riskyCalls)
+	}
+	if m.Allowed("fake", "echo") {
+		t.Fatal("forced approval saved an Always allow choice")
 	}
 }
 

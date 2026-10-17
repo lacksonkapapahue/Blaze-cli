@@ -43,6 +43,7 @@ func usage() {
 		ui.Accent("blaze login") + ui.Sub(" · ") + ui.Accent("logout") + ui.Sub(" · ") + ui.Accent("whoami") + ui.Sub("    your Blaze account (shared with Desktop)"),
 		ui.Accent("blaze connect [app]") + ui.Sub("            connect Google, GitHub, Notion, Slack…"),
 		ui.Accent("blaze mcp list|add|remove") + ui.Sub("      MCP servers (blaze mcp help)"),
+		ui.Accent("blaze rea status|enable|disable") + ui.Sub("   check, connect or disconnect the REA reverse-engineering server"),
 		ui.Accent("blaze keys [sync]") + ui.Sub("              your model keys (shared with Desktop and your phone)"),
 		ui.Accent("blaze theme [name]") + ui.Sub("             accent preset: blaze · ember · mint · violet · mono"),
 		ui.Accent("blaze stats") + ui.Sub("                    your streak and the last 7 days"),
@@ -142,6 +143,12 @@ func main() {
 			os.Exit(1)
 		}
 		return
+	case "rea":
+		if err := cmdREA(rest[1:], false); err != nil {
+			fail(err.Error())
+			os.Exit(1)
+		}
+		return
 	case "schedule":
 		sub := ""
 		if len(rest) > 1 {
@@ -219,6 +226,7 @@ func main() {
 			}
 		}
 		wire(a, false)
+		maybeConnectREA(prompt)
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer stop()
 		if _, err := a.AskImages(ctx, expandRefs(a, prompt), takePendingImages()); err != nil {
@@ -250,7 +258,7 @@ func accountCmd(cmd string, args []string) error {
 	return nil
 }
 
-var slashCmds = []string{"/agents", "/auto", "/autopilot", "/build", "/clear", "/compact", "/connect", "/disconnect", "/doctor", "/exit", "/help", "/init", "/jobs", "/keys", "/learn", "/login", "/logout", "/mcp", "/model", "/new", "/notify", "/pc", "/plan", "/quit", "/resume", "/rewind", "/schedule", "/setup", "/skills", "/stats", "/theme", "/undo", "/update", "/whoami", "/yolo"}
+var slashCmds = []string{"/agents", "/auto", "/autopilot", "/build", "/clear", "/compact", "/connect", "/disconnect", "/doctor", "/exit", "/help", "/init", "/jobs", "/keys", "/learn", "/login", "/logout", "/mcp", "/model", "/new", "/notify", "/pc", "/plan", "/quit", "/rea", "/resume", "/rewind", "/schedule", "/setup", "/skills", "/stats", "/theme", "/undo", "/update", "/whoami", "/yolo"}
 
 // welcomeWhere is the start screen's context line (OS · shell · folder), kept so
 // /clear can draw the same start screen again.
@@ -389,6 +397,7 @@ func repl(a *agent.Agent, bg *bgAgents, in sysinfo.Info, cont bool) {
 		turn := beginTurn(a, typed, prompt)
 		mark := turnBegin()
 		ctx, c := context.WithCancel(context.Background())
+		maybeConnectREA(prompt)
 		mu.Lock()
 		cancel = c
 		mu.Unlock()
@@ -630,6 +639,7 @@ func help() {
 		ui.Accent("/agents") + ui.Sub("    background agents: list · <name> · msg · cancel · resume · discard · new"),
 		ui.Accent("/login") + ui.Sub("     Blaze account   ") + ui.Accent("/whoami") + ui.Sub("   ") + ui.Accent("/logout") + ui.Sub("   ") + ui.Accent("/connect") + ui.Sub(" [app]   ") + ui.Accent("/keys") + ui.Sub(" [sync]"),
 		ui.Accent("/mcp") + ui.Sub("       MCP servers: status · reload · add · remove · enable|disable NAME"),
+		ui.Accent("/rea") + ui.Sub("        REA reverse engineering: status · enable · disable"),
 		ui.Accent("/model") + ui.Sub("     pick the model Blaze uses (saved)"),
 		ui.Accent("/theme") + ui.Sub("     accent preset (saved)   ") + ui.Accent("/stats") + ui.Sub(" streak and last 7 days"),
 		ui.Accent("/skills") + ui.Sub("    skill library: list · <name> · on|off|delete|restore <name>   ") + ui.Accent("/learn") + ui.Sub(" [on|off]"),
@@ -736,6 +746,10 @@ func slash(a *agent.Agent, bg *bgAgents, line string, run func(string)) bool {
 		setup.Doctor(a.Cfg, *a.Env.Info, version)
 	case "/mcp":
 		if err := cmdMCP(f[1:], true); err != nil {
+			fail(err.Error())
+		}
+	case "/rea":
+		if err := cmdREA(f[1:], true); err != nil {
 			fail(err.Error())
 		}
 	case "/setup":

@@ -247,6 +247,7 @@ func Brief(f Facts) string {
 	b.WriteString("\nABOUT YOU\n")
 	fmt.Fprintf(&b, "- You are Blaze, running here as %s %s. Blaze is made by Luke (Lackson Kapapa, Blazeinchue). Three apps: Blaze Desktop (Windows/macOS/Linux), Blaze CLI (terminal) and Blaze Android (phone).\n", f.App, nz(f.Version, "dev"))
 	b.WriteString("- How they connect: sign in to the same Blaze account in each app. " + modelsLine + " Desktop and CLI on one computer share " + nz(f.DataDir, "~/.blaze") + " (keys, skills, memory, MCP).\n")
+	b.WriteString("- Reverse Engineer Anything (REA) is bundled for authorised analysis of shipped apps, binaries and firmware; skip it for ordinary source-code repositories. `/rea` or `blaze rea status|enable|disable` checks and manages its pinned MCP server.\n")
 	b.WriteString("- Phone ↔ PC (Blaze Link): " + linkLine(f) + "\n")
 	if f.Router.Present {
 		fmt.Fprintf(&b, "- BlazeRouter: %s, %s (dashboard /dashboard).\n", onOff(f.Router.Running, "on", "off"), nz(f.Router.URL, "http://127.0.0.1:20128"))
@@ -350,6 +351,7 @@ func one(f Facts, s string) string {
 	case "identity":
 		h("Identity")
 		li("Blaze: an AI assistant that acts on your own devices (runs commands, edits files, builds things, remembers you).")
+		li("Reverse Engineer Anything (REA) is bundled for authorised evidence-led analysis of shipped apps, binaries, firmware and packaged software; skip it for ordinary source-code repositories. `blaze rea status|enable|disable` manages the pinned MCP server; `/rea` is available in chat.")
 		li("Made by Luke (Lackson Kapapa) of Blazeinchue, a computer science student at Northrise University.")
 		li("This app: %s %s.", f.App, nz(f.Version, "dev"))
 		if f.Model != "" {

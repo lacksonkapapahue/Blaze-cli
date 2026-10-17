@@ -51,6 +51,7 @@ var slashMenuCmds = []slashCmd{
 	{"/connect", "Connect an app: google · github · notion · slack · spotify", true},
 	{"/disconnect", "Disconnect an app", true},
 	{"/mcp", "MCP servers: status · reload · add · remove · enable|disable", true},
+	{"/rea", "Reverse Engineer Anything: status · enable · disable", true},
 	{"/keys", "Your model keys (shared with Desktop and your phone): sync", true},
 	{"/notify", "Desktop notifications when a task finishes", false},
 	{"/theme", "Accent colour: blaze · ember · mint · violet · mono", true},
@@ -228,6 +229,12 @@ func argMenu(cmd, rest string) *ui.MenuSet {
 			opts = append(opts, opt{sv.Name, d, false, ""})
 		}
 		return optMenu(cmd+" "+first+" ", "mcp · "+first, after, opts)
+	case "/rea":
+		return optMenu(cmd+" ", "rea", rest, []opt{
+			{"status", "Check Node, npx, procps and server registration", false, ""},
+			{"enable", "Connect the pinned REA MCP server after approval", false, ""},
+			{"disable", "Remove REA from the global MCP config", false, ""},
+		})
 	case "/agents":
 		if !spaced {
 			return optMenu(cmd+" ", "agents", rest, []opt{

@@ -199,21 +199,18 @@ func Prompt() string { return "\n" + Accent("›") + " " }
 
 // Confirm shows the app's confirm card, then an arrow-key Yes / No.
 func Confirm(title, detail string) bool {
-	Box(AccentLabel(title), wrapLines(detail, []string{Ink(detail)}))
+	Box(AccentLabel(title), confirmLines(detail, termWidth()))
 	return Choose("  "+Accent("?")+" ", []string{"Yes", "No"}, 1, 1) == 0
 }
 
-func wrapLines(detail string, lines []string) []string {
-	if width(detail) <= 84 {
-		return lines
+func confirmLines(detail string, terminalWidth int) []string {
+	maxWidth := min(84, max(1, terminalWidth-6))
+	plain := wrapText(detail, maxWidth)
+	lines := make([]string, len(plain))
+	for i, line := range plain {
+		lines[i] = Ink(line)
 	}
-	var out []string
-	for len(detail) > 84 {
-		out = append(out, Ink(detail[:84]))
-		detail = detail[84:]
-	}
-	out = append(out, Ink(detail))
-	return out
+	return lines
 }
 
 // Secret reads a line without echo when possible (API keys).
