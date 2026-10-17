@@ -3,24 +3,28 @@
 //
 // Blaze has no server, so OAuth happens on this computer: the system browser signs
 // in, the code comes back to a 127.0.0.1 loopback port (or the blaze:// protocol),
-// Blaze exchanges it with PKCE and keeps the tokens in the OS keychain. Settings
-// that are not secret (client IDs, enabled flags, per-tool approval) live in
-// ~/.blaze/desktop/connectors.json.
+// Blaze exchanges it with PKCE and keeps the tokens in the OS keychain first; on
+// machines without one (headless Linux, Codespaces, SSH) a 0600 file in the Blaze
+// home, same policy as internal/keystore. Settings that are not secret (client IDs,
+// enabled flags, per-tool approval) live in ~/.blaze/desktop/connectors.json.
 package connect
 
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/lacksonkapapahue/blaze-cli/internal/config"
 	"github.com/zalando/go-keyring"
 )
 
-// Secrets is where tokens, client secrets and MCP keys go. Never a plain file.
+// Secrets keeps tokens and client secrets in the OS keychain first, falling back to
+// a 0600 file in the Blaze home when no keychain is available.
 type Secrets interface {
 	Get(key string) (string, error)
 	Set(key, value string) error
@@ -28,21 +32,157 @@ type Secrets interface {
 }
 
 // Keychain is the OS keychain (Windows Credential Manager, macOS Keychain, Linux
-// Secret Service), under the same service name as Blaze's model keys.
-func Keychain() Secrets { return keychain{} }
+// Secret Service), under the same service name as Blaze's model keys, with a
+// private-file fallback for machines without a keychain.
+func Keychain() Secrets { return KeychainAt(config.Dir()) }
 
-type keychain struct{}
+// KeychainAt creates a secret store using dir for its private-file fallback.
+func KeychainAt(dir string) Secrets {
+	return &keychain{path: filepath.Join(dir, "secrets.json")}
+}
+
+type keychain struct{ path string }
 
 const service = "blaze-cli"
 
-func (keychain) Get(k string) (string, error) { return keyring.Get(service, k) }
-func (keychain) Set(k, v string) error {
-	if err := keyring.Set(service, k, v); err != nil {
-		return errors.New("couldn't save to the system keychain (" + err.Error() + "). On Linux, install and unlock a Secret Service such as GNOME Keyring or KWallet")
+var (
+	secretsFileMu      sync.Mutex
+	fileFallbackUsed   bool
+	fallbackNoticeSent bool
+)
+
+// UsedFileFallback reports true once per process after a secret has used the
+// private-file fallback.
+func UsedFileFallback() bool {
+	secretsFileMu.Lock()
+	defer secretsFileMu.Unlock()
+	if !fileFallbackUsed || fallbackNoticeSent {
+		return false
+	}
+	fallbackNoticeSent = true
+	return true
+}
+
+func (s *keychain) Get(k string) (string, error) {
+	if v, err := keyring.Get(service, k); err == nil {
+		return v, nil
+	}
+	secretsFileMu.Lock()
+	defer secretsFileMu.Unlock()
+	secrets, err := readSecrets(s.path)
+	if err != nil {
+		return "", err
+	}
+	if v, ok := secrets[k]; ok {
+		fileFallbackUsed = true
+		return v, nil
+	}
+	return "", keyring.ErrNotFound
+}
+
+func (s *keychain) Set(k, v string) error {
+	if err := keyring.Set(service, k, v); err == nil {
+		secretsFileMu.Lock()
+		defer secretsFileMu.Unlock()
+		secrets, readErr := readSecrets(s.path)
+		if readErr != nil {
+			fmt.Fprintln(os.Stderr, "blaze: couldn't remove the stale sign-in fallback copy:", readErr)
+			return nil
+		}
+		if _, ok := secrets[k]; ok {
+			delete(secrets, k)
+			if err := writeSecrets(s.path, secrets); err != nil {
+				fmt.Fprintln(os.Stderr, "blaze: couldn't remove the stale sign-in fallback copy:", err)
+			}
+		}
+		return nil
+	} else {
+		secretsFileMu.Lock()
+		defer secretsFileMu.Unlock()
+		secrets, readErr := readSecrets(s.path)
+		if readErr != nil {
+			return errors.New("couldn't save your sign-in (keychain: " + err.Error() + "; file: " + readErr.Error() + ")")
+		}
+		if secrets == nil {
+			secrets = make(map[string]string)
+		}
+		secrets[k] = v
+		if fileErr := writeSecrets(s.path, secrets); fileErr != nil {
+			return errors.New("couldn't save your sign-in (keychain: " + err.Error() + "; file: " + fileErr.Error() + ")")
+		}
+		fileFallbackUsed = true
 	}
 	return nil
 }
-func (keychain) Delete(k string) error { return keyring.Delete(service, k) }
+
+func (s *keychain) Delete(k string) error {
+	_ = keyring.Delete(service, k)
+	secretsFileMu.Lock()
+	defer secretsFileMu.Unlock()
+	secrets, err := readSecrets(s.path)
+	if err != nil {
+		return err
+	}
+	if _, ok := secrets[k]; !ok {
+		return nil
+	}
+	delete(secrets, k)
+	if len(secrets) == 0 {
+		if err := os.Remove(s.path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	return writeSecrets(s.path, secrets)
+}
+
+func readSecrets(path string) (map[string]string, error) {
+	b, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var secrets map[string]string
+	if err := json.Unmarshal(b, &secrets); err != nil {
+		return nil, err
+	}
+	return secrets, nil
+}
+
+func writeSecrets(path string, secrets map[string]string) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	b, err := json.Marshal(secrets)
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".secrets-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(b); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
+}
 
 // MemSecrets is an in-memory store for tests.
 type MemSecrets struct {

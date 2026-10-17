@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -78,7 +79,7 @@ func Chat(ctx context.Context, p config.Provider, key, model string, msgs []Mess
 func chat(ctx context.Context, p config.Provider, key, model string, msgs []Message, tools []Tool, extra map[string]any, onText func(string)) (*Result, error) {
 	body := map[string]any{"model": model, "messages": msgs, "stream": true}
 	if len(tools) > 0 {
-		body["tools"] = tools
+		body["tools"] = normalizeTools(tools)
 	}
 	for k, v := range extra {
 		body[k] = v
@@ -206,6 +207,42 @@ func chat(ctx context.Context, p config.Provider, key, model string, msgs []Mess
 	}
 	res.Text = text.String()
 	return res, nil
+}
+
+func normalizeTools(tools []Tool) []Tool {
+	out := make([]Tool, len(tools))
+	copy(out, tools)
+	for i := range out {
+		params := out[i].Function.Parameters
+		if params == nil {
+			out[i].Function.Parameters = map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			}
+			continue
+		}
+		normalized := make(map[string]any, len(params)+1)
+		for key, value := range params {
+			normalized[key] = value
+		}
+		properties, hasProperties := normalized["properties"]
+		propertiesNil := properties == nil
+		if hasProperties && !propertiesNil {
+			rv := reflect.ValueOf(properties)
+			propertiesNil = rv.Kind() == reflect.Map && rv.IsNil()
+		}
+		if !hasProperties || propertiesNil {
+			normalized["properties"] = map[string]any{}
+		}
+		if required, ok := normalized["required"]; ok {
+			rv := reflect.ValueOf(required)
+			if required == nil || (rv.Kind() == reflect.Slice && (rv.IsNil() || rv.Len() == 0)) {
+				delete(normalized, "required")
+			}
+		}
+		out[i].Function.Parameters = normalized
+	}
+	return out
 }
 
 func cleanErr(s string) string {

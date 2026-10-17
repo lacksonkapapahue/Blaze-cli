@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -44,6 +45,59 @@ func TestPickModel(t *testing.T) {
 		if got := PickModel(c.ids); got != c.want {
 			t.Errorf("PickModel(%v) = %q, want %q", c.ids, got, c.want)
 		}
+	}
+}
+
+func TestNormalizeTools(t *testing.T) {
+	var nilParameters Tool
+	nilParameters.Function.Name = "nil_parameters"
+	var nilRequired Tool
+	nilRequired.Function.Name = "nil_required"
+	nilRequired.Function.Parameters = map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"a": map[string]any{"type": "string"}},
+		"required":   []string(nil),
+	}
+	var required Tool
+	required.Function.Name = "required"
+	required.Function.Parameters = map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"a": map[string]any{"type": "string"}},
+		"required":   []string{"a"},
+	}
+
+	original := []Tool{nilParameters, nilRequired, required}
+	normalized := normalizeTools(original)
+	if len(normalized) != len(original) {
+		t.Fatalf("normalizeTools() length = %d, want %d", len(normalized), len(original))
+	}
+	if normalized[0].Function.Parameters["type"] != "object" {
+		t.Fatalf("nil parameters type = %v, want object", normalized[0].Function.Parameters["type"])
+	}
+	if _, ok := normalized[0].Function.Parameters["properties"].(map[string]any); !ok {
+		t.Fatalf("nil parameters properties = %#v, want empty object", normalized[0].Function.Parameters["properties"])
+	}
+	for _, index := range []int{0, 1} {
+		b, err := json.Marshal(normalized[index].Function.Parameters)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(b), `"required"`) {
+			t.Fatalf("normalized parameters contain required: %s", b)
+		}
+	}
+	if original[1].Function.Parameters["required"] == nil {
+		t.Fatal("normalizeTools mutated the input parameters map")
+	}
+	if got := normalized[2].Function.Parameters["required"]; !reflect.DeepEqual(got, []string{"a"}) {
+		t.Fatalf("non-empty required = %#v, want [a]", got)
+	}
+	b, err := json.Marshal(normalized[2].Function.Parameters)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"required":["a"]`) {
+		t.Fatalf("non-empty required was not preserved: %s", b)
 	}
 }
 

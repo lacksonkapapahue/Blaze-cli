@@ -56,6 +56,8 @@ type Client struct {
 	Timeout time.Duration
 	// Name labels the session at the service ("Blaze CLI"; default "Blaze Desktop").
 	Name string
+	// Paste optionally reads a callback URL when the browser cannot reach loopback.
+	Paste func(ctx context.Context) <-chan string
 }
 
 func (c *Client) name() string {
@@ -351,9 +353,40 @@ type cbResult struct {
 	code, errCode string
 }
 
+var errCallbackState = errors.New("callback state does not match")
+
+func parseCallback(line, state string) (cbResult, error) {
+	line = strings.TrimSpace(line)
+	line = strings.Trim(line, `"'`)
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return cbResult{}, errors.New("empty callback")
+	}
+	var q url.Values
+	if u, err := url.Parse(line); err == nil && (u.Scheme != "" || u.Host != "") {
+		q = u.Query()
+	} else {
+		q, err = url.ParseQuery(strings.TrimPrefix(line, "?"))
+		if err != nil {
+			return cbResult{}, err
+		}
+	}
+	if q.Get("state") != state {
+		return cbResult{}, errCallbackState
+	}
+	res := cbResult{code: q.Get("code"), errCode: q.Get("error")}
+	if res.errCode == "" && res.code == "" {
+		res.errCode = "missing_code"
+	}
+	return res, nil
+}
+
 // authorize: listen on 127.0.0.1:<random>, open the Worker's start URL, wait for the
 // redirect back with our state, then redeem the one-time code with the verifier.
 func (c *Client) authorize(ctx context.Context, startPath string, scopes []string, open func(string)) (*Redeemed, error) {
+	authCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, fmt.Errorf("Blaze couldn't open a local port for the sign-in: %v", err)
@@ -366,14 +399,13 @@ func (c *Client) authorize(ctx context.Context, startPath string, scopes []strin
 	got := make(chan cbResult, 1)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/cb", func(w http.ResponseWriter, r *http.Request) {
-		q := r.URL.Query()
-		if q.Get("state") != state {
+		res, err := parseCallback(r.URL.RawQuery, state)
+		if errors.Is(err, errCallbackState) {
 			writePage(w, false, "Sign-in didn't finish", "That link doesn't match the sign-in Blaze started. Start again from Blaze.")
 			return
 		}
-		res := cbResult{code: q.Get("code"), errCode: q.Get("error")}
-		if res.errCode == "" && res.code == "" {
-			res.errCode = "missing_code"
+		if err != nil {
+			res = cbResult{errCode: "missing_code"}
 		}
 		if res.errCode != "" {
 			msg := "The sign-in came back with an error (" + res.errCode + "). Go back to Blaze and try again."
@@ -412,18 +444,52 @@ func (c *Client) authorize(ctx context.Context, startPath string, scopes []strin
 	}
 	open(c.Base + startPath + "?" + v.Encode())
 
+	var paste <-chan string
+	if c.Paste != nil {
+		paste = c.Paste(authCtx)
+	}
 	timeout := c.Timeout
 	if timeout <= 0 {
 		timeout = 10 * time.Minute
 	}
 	var res cbResult
-	select {
-	case res = <-got:
-	case <-ctx.Done():
-		return nil, ErrCancelled
-	case <-time.After(timeout):
-		return nil, ErrCancelled
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		select {
+		case res = <-got:
+			return c.redeem(authCtx, res, verifier)
+		case line, ok := <-paste:
+			if !ok {
+				paste = nil
+				continue
+			}
+			var err error
+			res, err = parseCallback(line, state)
+			if errors.Is(err, errCallbackState) {
+				fmt.Fprintln(os.Stderr, "That link is from a different sign-in. Paste the address from this sign-in.")
+				if c.Paste != nil {
+					paste = c.Paste(authCtx)
+				}
+				continue
+			}
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "That doesn't look like a sign-in address. Paste the full address from the browser.")
+				if c.Paste != nil {
+					paste = c.Paste(authCtx)
+				}
+				continue
+			}
+			return c.redeem(authCtx, res, verifier)
+		case <-authCtx.Done():
+			return nil, ErrCancelled
+		case <-timer.C:
+			return nil, ErrCancelled
+		}
 	}
+}
+
+func (c *Client) redeem(ctx context.Context, res cbResult, verifier string) (*Redeemed, error) {
 	if res.errCode != "" {
 		if res.errCode == "not_configured" {
 			return nil, ErrNotConfigured

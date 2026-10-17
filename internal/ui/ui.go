@@ -4,6 +4,8 @@ package ui
 
 import (
 	"bufio"
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -167,6 +169,30 @@ func ReadLine(prompt string) (string, error) {
 	}
 	s, err := In.ReadString('\n')
 	return strings.TrimRight(s, "\r\n"), err
+}
+
+func ReadLineContext(ctx context.Context, prompt string) (string, error) {
+	if !StdinTTY() || !IsTTY() {
+		return "", errors.New("pasting a sign-in address requires an interactive terminal")
+	}
+	type result struct {
+		line string
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		var e Editor
+		line, err := e.Read(prompt)
+		done <- result{line: line, err: err}
+	}()
+	select {
+	case r := <-done:
+		return r.line, r.err
+	case <-ctx.Done():
+		Wake()
+		<-done
+		return "", ctx.Err()
+	}
 }
 
 func Prompt() string { return "\n" + Accent("›") + " " }

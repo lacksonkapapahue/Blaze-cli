@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -117,6 +118,90 @@ func TestCancel(t *testing.T) {
 	_, err := New(ws.URL).Connect(ctx, "google", nil, func(string) {})
 	if !errors.Is(err, ErrCancelled) {
 		t.Fatalf("want cancelled, got %v", err)
+	}
+}
+
+func TestParseCallback(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		line    string
+		state   string
+		want    cbResult
+		wantErr bool
+	}{
+		{"full URL", "http://127.0.0.1:1234/cb?code=abc&state=s1", "s1", cbResult{code: "abc"}, false},
+		{"bare query", "code=abc&state=s1", "s1", cbResult{code: "abc"}, false},
+		{"quoted URL", `"http://127.0.0.1:1234/cb?code=abc&state=s1"`, "s1", cbResult{code: "abc"}, false},
+		{"wrong state", "code=abc&state=old", "s1", cbResult{}, true},
+		{"access denied", "error=access_denied&state=s1", "s1", cbResult{errCode: "access_denied"}, false},
+		{"missing code", "state=s1", "s1", cbResult{errCode: "missing_code"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseCallback(tc.line, tc.state)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("parseCallback() error = %v, want error %v", err, tc.wantErr)
+			}
+			if got != tc.want {
+				t.Fatalf("parseCallback() = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSignInWithPasteCallback(t *testing.T) {
+	var callbackURL string
+	ws := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/oauth/redeem" || r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+		var body map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode redeem request: %v", err)
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		if body["code"] != "abc" || body["code_verifier"] == "" {
+			t.Errorf("redeem body = %#v", body)
+		}
+		_, _ = io.WriteString(w, `{"kind":"session","token":"t","user":{"id":"u","email":"u@example.com"}}`)
+	}))
+	defer ws.Close()
+
+	c := New(ws.URL)
+	pasteCalls := 0
+	var pasteCtx context.Context
+	c.Paste = func(ctx context.Context) <-chan string {
+		pasteCtx = ctx
+		u, err := url.Parse(callbackURL)
+		if err != nil {
+			t.Errorf("parse start URL: %v", err)
+			return nil
+		}
+		pasteCalls++
+		ch := make(chan string, 1)
+		state := url.QueryEscape(u.Query().Get("state"))
+		if pasteCalls == 1 {
+			ch <- "http://127.0.0.1:1/cb?code=old&state=wrong"
+		} else {
+			ch <- "http://127.0.0.1:1/cb?code=abc&state=" + state
+		}
+		return ch
+	}
+	s, err := c.SignInWith(context.Background(), "google", func(u string) { callbackURL = u })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Token != "t" || s.User.ID != "u" {
+		t.Fatalf("session = %+v", s)
+	}
+	if pasteCalls != 2 {
+		t.Fatalf("Paste called %d times, want retry after wrong state", pasteCalls)
+	}
+	select {
+	case <-pasteCtx.Done():
+	default:
+		t.Fatal("paste context was not cancelled after sign-in completed")
 	}
 }
 

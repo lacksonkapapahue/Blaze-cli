@@ -3,9 +3,9 @@ package main
 // Blaze accounts and connectors in the terminal: blaze login / logout / whoami /
 // connect, through blaze-auth (the Cloudflare Worker in the desktop repo's cloud/).
 // The session and connector tokens use the same store as Blaze Desktop: the OS
-// keychain under "blaze-cli" (session key "blaze-account:session"), the signed-in
-// user cached in ~/.blaze/desktop/account.json and connector state in
-// ~/.blaze/desktop/, so signing in on one signs in the other.
+// keychain under "blaze-cli", with a 0600 file fallback in the Blaze home; the
+// signed-in user is cached in ~/.blaze/desktop/account.json and connector state in
+// ~/.blaze/desktop/, so signing in on one signs in on the other.
 
 import (
 	"context"
@@ -20,6 +20,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/term"
 
 	"github.com/lacksonkapapahue/blaze-cli/internal/cloud"
 	"github.com/lacksonkapapahue/blaze-cli/internal/config"
@@ -45,6 +47,61 @@ func openURL(u string) {
 		cmd = exec.Command("xdg-open", u)
 	}
 	_ = cmd.Start()
+}
+
+func openOAuthURL(u string) {
+	if _, ok := os.LookupEnv("CODESPACES"); ok {
+		if browser := strings.Fields(os.Getenv("BROWSER")); len(browser) > 0 {
+			args := append(browser[1:], u)
+			if err := exec.Command(browser[0], args...).Start(); err == nil {
+				return
+			}
+		}
+	}
+	openURL(u)
+}
+
+func isRemoteSession() bool {
+	for _, key := range []string{"CODESPACES", "SSH_CONNECTION", "SSH_TTY", "REMOTE_CONTAINERS"} {
+		if _, ok := os.LookupEnv(key); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func pasteOAuthCallback(sp *ui.Spinner, waiting string) func(context.Context) <-chan string {
+	return func(ctx context.Context) <-chan string {
+		lines := make(chan string)
+		sp.Stop()
+		go func() {
+			defer close(lines)
+			line, err := ui.ReadLineContext(ctx, "  Paste the browser address and press Enter: ")
+			if err == nil {
+				if ctx.Err() == nil {
+					sp.Start(waiting)
+				}
+				select {
+				case lines <- line:
+				case <-ctx.Done():
+					return
+				}
+			} else if ctx.Err() == nil {
+				ui.Println("  " + ui.Weak("Could not read the sign-in address: "+err.Error()))
+				sp.Start(waiting)
+			}
+		}()
+		return lines
+	}
+}
+
+func printOAuthInstructions() {
+	if isRemoteSession() {
+		ui.Println("  This is a remote machine. After you approve, your browser shows a page that can't load (127.0.0.1).")
+		ui.Println("  Copy that page's full address and paste it here, then press Enter.")
+		return
+	}
+	ui.Println("  " + ui.Weak("If the browser ends on a page that can't load, paste its address here."))
 }
 
 // account is the Worker client plus the shared secret store.
@@ -102,7 +159,9 @@ func (ac *account) cachedUser() *cloud.User {
 
 func (ac *account) setSession(s *cloud.Session) error {
 	if s == nil {
-		_ = ac.sec.Delete(sessionKey)
+		if err := ac.sec.Delete(sessionKey); err != nil {
+			return err
+		}
 		_ = os.Remove(accountFile())
 		return nil
 	}
@@ -138,7 +197,9 @@ func cmdLogin(args []string) error {
 	// Blaze Cloud: `blaze login --force` (or "again") signs in afresh, and a saved
 	// session the service refuses (401) no longer blocks signing in again.
 	if method == "force" || method == "again" {
-		_ = ac.setSession(nil)
+		if err := ac.setSession(nil); err != nil {
+			return err
+		}
 		method = ""
 		if len(args) > 1 {
 			method = strings.TrimLeft(strings.ToLower(args[1]), "-")
@@ -188,11 +249,16 @@ func cmdLogin(args []string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 11*time.Minute)
 		defer cancel()
 		var sp ui.Spinner
+		waiting := "waiting for " + titleCase(method) + " in the browser"
+		previousPaste := ac.client.Paste
+		ac.client.Paste = pasteOAuthCallback(&sp, waiting)
+		defer func() { ac.client.Paste = previousPaste }()
 		s, err = ac.client.SignInWith(ctx, method, func(u string) {
 			ui.Println("  " + ui.Sub("Opening your browser. If it doesn't open, visit:"))
 			ui.Println("  " + ui.Accent(u))
-			openURL(u)
-			sp.Start("waiting for " + titleCase(method) + " in the browser")
+			printOAuthInstructions()
+			openOAuthURL(u)
+			sp.Start(waiting)
 		})
 		sp.Stop()
 	default:
@@ -206,6 +272,9 @@ func cmdLogin(args []string) error {
 	}
 	if err := ac.setSession(s); err != nil {
 		return err
+	}
+	if connect.UsedFileFallback() && term.IsTerminal(int(os.Stderr.Fd())) {
+		fmt.Fprintln(os.Stderr, "  "+ui.Weak("No system keychain here, so Blaze keeps your sign-in in ~/.blaze/secrets.json (only you can read it)."))
 	}
 	ui.StepDone(true, "Signed in as "+userLine(&s.User), "Blaze Cloud is ready · no API keys needed · shared with Blaze Desktop", 0)
 	if r, err := syncKeys(20 * time.Second); err == nil {
@@ -248,7 +317,9 @@ func cmdLogout() error {
 		_ = ac.client.Logout(ctx, tok) // best effort: offline still signs out here
 		cancel()
 	}
-	_ = ac.setSession(nil)
+	if err := ac.setSession(nil); err != nil {
+		return err
+	}
 	ui.StepDone(true, "Signed out", "here and in Blaze Desktop", 0)
 	return nil
 }
@@ -345,7 +416,8 @@ func getConns() *connect.Manager {
 				// Only user-started sign-ins open a URL, so the prompt isn't open: print directly.
 				ui.Println("  " + ui.Sub("Opening your browser. If it doesn't open, visit:"))
 				ui.Println("  " + ui.Accent(u))
-				openURL(u)
+				printOAuthInstructions()
+				openOAuthURL(u)
 			},
 			ConfirmCtx: func(ctx context.Context, title, detail string, always bool) (bool, bool) {
 				return confirmHook(ctx, title, detail, always)
@@ -409,6 +481,13 @@ func cmdConnect(args []string) error {
 		<-connEvents
 	}
 	var r connect.ConnectResult
+	sp := ui.Spinner{}
+	waiting := "waiting for " + cv.Name + " in the browser"
+	ac := getAccount()
+	previousPaste := ac.client.Paste
+	ac.client.Paste = pasteOAuthCallback(&sp, waiting)
+	defer func() { ac.client.Paste = previousPaste }()
+	sp.Start(waiting)
 	if manual {
 		r = m.ConnectManual(id)
 	} else {
@@ -416,16 +495,16 @@ func cmdConnect(args []string) error {
 	}
 	switch r.Status {
 	case "error":
+		sp.Stop()
 		return errors.New(r.Error)
 	case "connected":
+		sp.Stop()
 		ui.StepDone(true, cv.Name+" connected", "", 0)
 		return nil
 	}
 	if r.UserCode != "" {
 		ui.Println("  " + ui.Ink("Enter the code ") + ui.Accent(r.UserCode) + ui.Ink(" at ") + ui.Accent(r.URL))
 	}
-	var sp ui.Spinner
-	sp.Start("waiting for " + cv.Name + " in the browser")
 	defer sp.Stop()
 	deadline := time.After(11 * time.Minute)
 	tick := time.NewTicker(time.Second)

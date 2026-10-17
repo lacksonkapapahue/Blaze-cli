@@ -58,6 +58,12 @@ func laneTools() []llm.Tool {
 		t.Type = "function"
 		t.Function.Name = name
 		t.Function.Description = desc
+		if req == nil {
+			req = []string{}
+		}
+		if props == nil {
+			props = map[string]any{}
+		}
 		t.Function.Parameters = map[string]any{"type": "object", "properties": props, "required": req}
 		return t
 	}
