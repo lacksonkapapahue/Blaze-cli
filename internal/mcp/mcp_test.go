@@ -432,6 +432,37 @@ func TestGating(t *testing.T) {
 	if err := m.Forget("fake"); err != nil || m.Allowed("fake", "echo") {
 		t.Fatal("forget")
 	}
+	autoReadOnlyPrompts := 0
+	autoReadOnly := Policy{
+		AutoReadOnly: func(server, _ string) bool { return server == "fake" },
+		Ask: func(context.Context, string, string) (bool, bool) {
+			autoReadOnlyPrompts++
+			return false, false
+		},
+	}
+	if r := m.Call(ctx, "mcp__fake__echo", `{"text":"static"}`, autoReadOnly); r != "echo: static" || autoReadOnlyPrompts != 0 {
+		t.Fatalf("read-only Auto exemption: %q prompts=%d", r, autoReadOnlyPrompts)
+	}
+	riskyCalls := 0
+	risky := func(server, tool string) bool { return server == "fake" && tool == "echo" }
+	askRisky := func(_ context.Context, title, detail string) (bool, bool) {
+		riskyCalls++
+		if title != "Use fake?" || !strings.Contains(detail, "REA tool: echo") || !strings.Contains(detail, "Target: /tmp/rea-target") {
+			t.Errorf("risky prompt: %q %q", title, detail)
+		}
+		return true, true
+	}
+	riskPolicy := Policy{Plan: true, Autopilot: true, Risky: risky, AskRisky: askRisky}
+	if r := m.Call(ctx, "mcp__fake__echo", `{"text":"target","targetPath":"/tmp/rea-target"}`, riskPolicy); r != PlanRefusal || riskyCalls != 0 {
+		t.Fatalf("Plan allowed risky tool: %q, prompts=%d", r, riskyCalls)
+	}
+	riskPolicy.Plan = false
+	if r := m.Call(ctx, "mcp__fake__echo", `{"text":"target","targetPath":"/tmp/rea-target"}`, riskPolicy); r != "echo: target" || riskyCalls != 1 {
+		t.Fatalf("Autopilot did not ask before risky tool: %q, prompts=%d", r, riskyCalls)
+	}
+	if m.Allowed("fake", "echo") {
+		t.Fatal("forced approval saved an Always allow choice")
+	}
 }
 
 func TestReconnectAfterServerDies(t *testing.T) {

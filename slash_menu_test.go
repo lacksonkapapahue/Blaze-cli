@@ -91,6 +91,7 @@ func TestArgMenus(t *testing.T) {
 	has("/update ", "/update --force")
 	has("/mcp ", "/mcp reload")
 	has("/mcp ", "/mcp remove ")
+	has("/rea ", "/rea enable")
 	has("/agents ", "/agents msg ")
 	has("/agents cap ", "/agents cap 3")
 	if get("/learn off ") != nil || get("/login github x") != nil {

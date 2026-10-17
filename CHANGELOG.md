@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.13.0 — Reverse engineering with REA
+
+- REA (Reverse Engineer Anything) built in: bundled skill + `blaze rea enable` to connect its MCP server.
+
 ## v0.12.2 — Remote OAuth sign-in
 
 - Sign in with Google/GitHub works in Codespaces and over SSH: paste the browser's final address back into Blaze.

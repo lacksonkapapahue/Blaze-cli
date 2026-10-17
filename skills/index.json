@@ -200,6 +200,35 @@
       ]
     },
     {
+      "name": "reverse-engineer-anything",
+      "description": "Reverse engineer native, managed, Electron/JavaScript, packaged, firmware, and browser targets with REA. Use shipped-artifact or requested runtime evidence to explain features, compare versions, decompile code, or guide a reconstruction. Skip REA for ordinary source-code repositories.",
+      "tags": [
+        "reverse engineer",
+        "decompile",
+        "how does app do X",
+        "binary",
+        "APK",
+        "Electron app",
+        ".NET assembly",
+        "ASAR",
+        "firmware",
+        "compare versions"
+      ],
+      "version": 42,
+      "sha256": "c4f39e380133d8613feccec0837ecc85c2267ad129e330c785b03e577b53f7b7",
+      "files": [
+        "LICENSE",
+        "SKILL.md",
+        "SOURCE.md",
+        "references/android-applications.md",
+        "references/connection-and-recovery.md",
+        "references/evidence-workflows.md",
+        "references/javascript-applications.md",
+        "references/native-and-artifacts.md",
+        "references/runtime-observation.md"
+      ]
+    },
+    {
       "name": "shell-sysadmin",
       "description": "Run and fix things on the user's computer across Windows (PowerShell), macOS and Linux including Arch - install software, manage services, disk space, processes, ports, networks, permissions, startup apps, scheduled jobs and updates - safely and with the right commands for that OS. Use for any \"my PC…\", \"install…\", \"why is X slow/full/broken\" or system-level task.",
       "tags": [

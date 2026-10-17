@@ -346,6 +346,12 @@ type Policy struct {
 	Autopilot bool
 	// Ask shows the approval prompt with "Always allow"; it returns (approved, always).
 	Ask func(ctx context.Context, title, detail string) (bool, bool)
+	// Risky forces an approval even in Autopilot or when the tool was allowed.
+	Risky func(server, tool string) bool
+	// AskRisky is used for forced approvals and omits "Always allow".
+	AskRisky func(ctx context.Context, title, detail string) (bool, bool)
+	// AutoReadOnly lets a host exempt read-only tools from Auto-mode prompts.
+	AutoReadOnly func(server, tool string) bool
 }
 
 // PlanRefusal is the answer to a Plan-mode call of a tool that may change things.
@@ -353,7 +359,7 @@ const PlanRefusal = "Plan mode is on, and this MCP tool doesn't say it only read
 
 // Call runs one MCP tool under the policy: Plan refuses tools that aren't
 // read-only, Auto asks first (unless always allowed; read-only tools in Plan
-// too), Autopilot runs it.
+// too), Autopilot runs it unless a tool is marked risky by the host.
 func (m *Manager) Call(ctx context.Context, name, rawArgs string, p Policy) string {
 	m.mu.Lock()
 	r, ok := m.routes[name]
@@ -365,7 +371,8 @@ func (m *Manager) Call(ctx context.Context, name, rawArgs string, p Policy) stri
 	if !ok || c == nil {
 		return "Error: the MCP tool " + name + " isn't available (its server may have stopped). Use another tool."
 	}
-	if p.Plan && !r.tool.ReadOnly() {
+	forced := p.Risky != nil && p.Risky(c.srv.Name, r.tool.Name)
+	if p.Plan && (!r.tool.ReadOnly() || forced) {
 		return PlanRefusal
 	}
 	var args map[string]any
@@ -374,25 +381,67 @@ func (m *Manager) Call(ctx context.Context, name, rawArgs string, p Policy) stri
 			return "Error in " + name + ": the arguments weren't a JSON object (" + err.Error() + "). Call it again with a JSON object."
 		}
 	}
-	if !p.Autopilot && !m.allowed(c.srv, r.tool.Name) {
-		if p.Ask == nil {
-			return "Declined: nobody is here to approve the MCP tool " + r.tool.Name + " on " + r.server + "."
-		}
+	autoReadOnly := r.tool.ReadOnly() && p.AutoReadOnly != nil && p.AutoReadOnly(c.srv.Name, r.tool.Name)
+	if forced || !autoReadOnly && !p.Autopilot && !m.allowed(c.srv, r.tool.Name) {
+		ask := p.Ask
 		detail := r.tool.Name + " on the MCP server " + r.server
-		if a := strings.TrimSpace(rawArgs); a != "" && a != "{}" {
+		if forced {
+			ask = p.AskRisky
+			detail = riskyToolDetail(r.tool.Name, args, rawArgs)
+		} else if a := strings.TrimSpace(rawArgs); a != "" && a != "{}" {
 			detail += "\n" + clip(a, 400)
 		}
-		yes, always := p.Ask(ctx, "Use "+r.server+"?", detail)
+		if ask == nil {
+			return "Declined: nobody is here to approve the MCP tool " + r.tool.Name + " on " + r.server + "."
+		}
+		yes, always := ask(ctx, "Use "+r.server+"?", detail)
 		if !yes {
 			return "Declined: the user did not approve " + r.tool.Name + " on " + r.server + ". Don't retry it; ask or take another approach."
 		}
-		if always {
+		if always && !forced {
 			if err := m.allow(c.srv, r.tool.Name); err != nil {
 				m.log("couldn't save the MCP approval: " + err.Error())
 			}
 		}
 	}
 	return m.run(ctx, c, r, args)
+}
+
+func riskyToolDetail(tool string, args map[string]any, rawArgs string) string {
+	var find func(map[string]any) string
+	find = func(values map[string]any) string {
+		keys := make([]string, 0, len(values))
+		for key := range values {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, preferred := range []string{"path", "targetpath", "filepath", "binarypath", "apkpath", "packagepath", "url", "target"} {
+			for _, key := range keys {
+				normalized := strings.NewReplacer("_", "", "-", "").Replace(strings.ToLower(key))
+				if normalized == preferred {
+					if value, ok := values[key].(string); ok && value != "" {
+						return value
+					}
+				}
+			}
+		}
+		for _, key := range keys {
+			if nested, ok := values[key].(map[string]any); ok {
+				if target := find(nested); target != "" {
+					return target
+				}
+			}
+		}
+		return ""
+	}
+	detail := "REA tool: " + tool
+	if target := find(args); target != "" {
+		return detail + "\nTarget: " + target
+	}
+	if raw := strings.TrimSpace(rawArgs); raw != "" && raw != "{}" {
+		return detail + "\nArguments: " + raw
+	}
+	return detail + "\nTarget: (not supplied)"
 }
 
 func (m *Manager) run(ctx context.Context, c *conn, r route, args map[string]any) string {

@@ -6,6 +6,7 @@
 //
 //	skills/<name>/SKILL.md      front matter + Markdown body
 //	skills/<name>/assets/...    optional files the skill refers to
+//	skills/<name>/references/... supporting Markdown referenced by the skill
 //
 //	---
 //	name: web-design-blaze-classic
@@ -198,7 +199,7 @@ func Load(fsys fs.FS) ([]Skill, error) {
 				return err
 			}
 			rel := strings.TrimPrefix(p, e.Name()+"/")
-			if rel == "SKILL.md" || strings.HasSuffix(rel, ".md") || strings.HasSuffix(rel, ".css") || strings.HasSuffix(rel, ".html") || strings.HasSuffix(rel, ".txt") {
+			if rel == "SKILL.md" || rel == "LICENSE" || strings.HasSuffix(rel, ".md") || strings.HasSuffix(rel, ".css") || strings.HasSuffix(rel, ".html") || strings.HasSuffix(rel, ".txt") {
 				b = LF(b)
 			}
 			s.Files[rel] = b
